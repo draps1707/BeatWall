@@ -15,7 +15,9 @@ import android.graphics.RenderNode
 import android.graphics.Shader
 import android.hardware.HardwareBuffer
 import android.media.ImageReader
+import androidx.core.graphics.ColorUtils
 import androidx.palette.graphics.Palette
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.random.Random
 
@@ -28,7 +30,7 @@ data class ProcessedArt(
 )
 
 data class CircadianTheme(
-    val periodKey: Int,
+    val minuteKey: Int,
     val backdrop: Bitmap,
     val primary: Int,
     val secondary: Int,
@@ -40,12 +42,25 @@ class ArtEffectProcessor {
     private val blurHeight = 780
     private val pool = arrayOf(
         Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888),
-        Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB8888_COMPAT)
+        Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888)
     )
     private var poolIdx = 0
 
     private val circadianBitmap = Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888)
     private var cachedCircadianTheme: CircadianTheme? = null
+
+    private data class SkyAnchor(val minute: Int, val primary: Int, val secondary: Int, val accent: Int)
+
+    // 7 Nuanced Sky Moods interpolated smoothly across 24 hours
+    private val skyAnchors = listOf(
+        SkyAnchor(240, 0xFF312E81.toInt(), 0xFF1E1B4B.toInt(), 0xFFA5B4FC.toInt()),  // 04:00 Pre-Dawn Indigo
+        SkyAnchor(390, 0xFFB45309.toInt(), 0xFF7C2D12.toInt(), 0xFFFDBA74.toInt()),  // 06:30 Sunrise Saffron
+        SkyAnchor(570, 0xFF0F766E.toInt(), 0xFF134E4A.toInt(), 0xFF5EEAD4.toInt()),  // 09:30 Crisp Morning Teal
+        SkyAnchor(810, 0xFF1D4ED8.toInt(), 0xFF1E293B.toInt(), 0xFF7DD3FC.toInt()),  // 13:30 Afternoon Sapphire-Slate
+        SkyAnchor(1050, 0xFF9A3412.toInt(), 0xFF701A75.toInt(), 0xFFFDA4AF.toInt()), // 17:30 Golden Hour Amber-Rose
+        SkyAnchor(1170, 0xFF5B21B6.toInt(), 0xFF1E1B4B.toInt(), 0xFFC4B5FD.toInt()), // 19:30 Twilight Violet
+        SkyAnchor(1320, 0xFF0F172A.toInt(), 0xFF064E3B.toInt(), 0xFF6EE7B7.toInt())  // 22:00 Deep Night Obsidian
+    )
 
     private val grainPaint = Paint().apply {
         val grainSize = 128
@@ -59,21 +74,20 @@ class ArtEffectProcessor {
         shader = BitmapShader(grainBmp, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
     }
 
-    fun getCircadianTheme(hourOfDay: Int): CircadianTheme {
-        val period = when (hourOfDay) {
-            in 5..7 -> 0   // Dawn
-            in 8..16 -> 1  // Day
-            in 17..18 -> 2 // Dusk
-            else -> 3      // Night
+    /**
+     * Smoothly interpolates across 7 sky moods, re-baking the bitmap only every >= 10 minutes.
+     * Applies 28% Late-Night OLED dimming between 22:00 and 05:00.
+     */
+    fun getCircadianTheme(minuteOfDay: Int): CircadianTheme {
+        val existing = cachedCircadianTheme
+        if (existing != null && abs(minuteOfDay - existing.minuteKey) < 10) {
+            return existing
         }
-        cachedCircadianTheme?.takeIf { it.periodKey == period }?.let { return it }
 
-        val (primary, secondary, accent) = when (period) {
-            0 -> Triple(0xFF7C3AED.toInt(), 0xFFB45309.toInt(), 0xFFFDBA74.toInt()) // Dawn: Saffron-Rose & Indigo
-            1 -> Triple(0xFF0F766E.toInt(), 0xFF1E3A8A.toInt(), 0xFF7DD3FC.toInt()) // Day: Sapphire & Teal
-            2 -> Triple(0xFF9A3412.toInt(), 0xFF4C1D95.toInt(), 0xFFFCA5A5.toInt()) // Dusk: Burnt Amber & Violet
-            else -> Triple(0xFF1E293B.toInt(), 0xFF064E3B.toInt(), 0xFF6EE7B7.toInt()) // Night: OLED Midnight & Emerald
-        }
+        val (a, b, t) = findSkyBrackets(minuteOfDay)
+        val primary = ColorUtils.blendARGB(a.primary, b.primary, t)
+        val secondary = ColorUtils.blendARGB(a.secondary, b.secondary, t)
+        val accent = ColorUtils.blendARGB(a.accent, b.accent, t)
 
         val canvas = Canvas(circadianBitmap)
         canvas.drawColor(0xFF05060A.toInt())
@@ -104,11 +118,34 @@ class ArtEffectProcessor {
             )
         }
         canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), vignettePaint)
+
+        // Late-Night OLED Dimming (22:00 - 05:00)
+        if (minuteOfDay >= 1320 || minuteOfDay < 300) {
+            canvas.drawColor(0x46000000)
+        }
+
         canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), grainPaint)
 
-        return CircadianTheme(period, circadianBitmap, primary, secondary, accent).also {
+        return CircadianTheme(minuteOfDay, circadianBitmap, primary, secondary, accent).also {
             cachedCircadianTheme = it
         }
+    }
+
+    private fun findSkyBrackets(minuteOfDay: Int): Triple<SkyAnchor, SkyAnchor, Float> {
+        for (i in 0 until skyAnchors.lastIndex) {
+            val a = skyAnchors[i]
+            val b = skyAnchors[i + 1]
+            if (minuteOfDay in a.minute..b.minute) {
+                val t = (minuteOfDay - a.minute).toFloat() / (b.minute - a.minute).coerceAtLeast(1)
+                return Triple(a, b, t)
+            }
+        }
+        // Wrap around midnight (22:00 -> 04:00)
+        val night = skyAnchors.last()
+        val preDawn = skyAnchors.first()
+        val span = (1440 - night.minute) + preDawn.minute
+        val elapsed = if (minuteOfDay >= night.minute) minuteOfDay - night.minute else (1440 - night.minute) + minuteOfDay
+        return Triple(night, preDawn, (elapsed.toFloat() / span).coerceIn(0f, 1f))
     }
 
     fun process(rawCover: Bitmap): ProcessedArt {
@@ -259,9 +296,5 @@ class ArtEffectProcessor {
 
     private fun withAlpha(color: Int, alpha: Int): Int {
         return (color and 0x00FFFFFF) or ((alpha and 0xFF) shl 24)
-    }
-
-    companion object {
-        private val ARGB8888_COMPAT = Bitmap.Config.ARGB_8888
     }
 }

@@ -15,6 +15,7 @@ import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -29,6 +30,7 @@ import android.view.SurfaceHolder
 import java.util.Calendar
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.sin
 
 class BeatWallService : WallpaperService() {
@@ -48,6 +50,8 @@ class BeatWallService : WallpaperService() {
             getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
         private val powerManager =
             getSystemService(Context.POWER_SERVICE) as PowerManager
+        private val batteryManager =
+            getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         private val tracker = MediaSessionTracker.getInstance(applicationContext)
         private val artProcessor = ArtEffectProcessor()
         private val choreographer = Choreographer.getInstance()
@@ -59,6 +63,9 @@ class BeatWallService : WallpaperService() {
         private var width = 1080
         private var height = 2400
         private var lastHiddenAtMs = 0L
+
+        private var isCharging = false
+        private var isLowBattery = false
 
         private var activeState: ActiveTrackState? = null
         private var prevState: ActiveTrackState? = null
@@ -94,6 +101,12 @@ class BeatWallService : WallpaperService() {
             color = 0x38FFFFFF
             strokeWidth = 2.5f
         }
+        private val arcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 3f
+            strokeCap = Paint.Cap.ROUND
+        }
+        private val orbPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val progressTrackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
             color = 0x26FFFFFF
@@ -125,17 +138,20 @@ class BeatWallService : WallpaperService() {
         private val miniArtRect = RectF()
         private val pillRect = RectF()
         private val backdropRect = RectF()
+        private val arcRect = RectF()
         private val lockLyricsClip = RectF()
         private val homeLyricsClip = RectF()
 
-        private val screenReceiver = object : BroadcastReceiver() {
+        private val systemReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action == Intent.ACTION_USER_PRESENT) {
-                    proceduralAnimator.reroll(calmOnly = activeState == null)
+                when (intent?.action) {
+                    Intent.ACTION_USER_PRESENT -> proceduralAnimator.reroll(calmOnly = activeState == null)
+                    Intent.ACTION_BATTERY_CHANGED -> updateBatteryFlags(intent)
+                    PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> updateBatteryFlags(null)
                 }
                 if (visible && powerManager.isInteractive) {
                     snapToCurrentPosition()
-                    scheduleNextFrame()
+                    updateLoopState()
                 }
             }
         }
@@ -147,18 +163,42 @@ class BeatWallService : WallpaperService() {
             val filter = IntentFilter().apply {
                 addAction(Intent.ACTION_SCREEN_ON)
                 addAction(Intent.ACTION_USER_PRESENT)
+                addAction(Intent.ACTION_BATTERY_CHANGED)
+                addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
             }
-            registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            val stickyBatt = registerReceiver(systemReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            updateBatteryFlags(stickyBatt)
         }
 
         override fun onDestroy() {
             stopLoop()
             tracker.removeListener(this)
             try {
-                unregisterReceiver(screenReceiver)
+                unregisterReceiver(systemReceiver)
             } catch (_: Exception) {
             }
             super.onDestroy()
+        }
+
+        private fun updateBatteryFlags(battIntent: Intent?) {
+            if (battIntent != null) {
+                val status = battIntent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                    status == BatteryManager.BATTERY_STATUS_FULL
+                val level = battIntent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                val scale = battIntent.getIntExtra(BatteryManager.EXTRA_SCALE, 100).coerceAtLeast(1)
+                val pct = (level * 100) / scale
+                isLowBattery = (!isCharging && pct in 0..14) || powerManager.isPowerSaveMode
+            } else {
+                val pct = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                isCharging = batteryManager.isCharging
+                isLowBattery = (!isCharging && pct in 0..14) || powerManager.isPowerSaveMode
+            }
+        }
+
+        private fun currentMinuteOfDay(): Int {
+            val cal = Calendar.getInstance()
+            return cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
         }
 
         override fun onComputeColors(): WallpaperColors? {
@@ -171,7 +211,7 @@ class BeatWallService : WallpaperService() {
                     WallpaperColors.HINT_SUPPORTS_DARK_TEXT
                 )
             }
-            val circ = artProcessor.getCircadianTheme(Calendar.getInstance().get(Calendar.HOUR_OF_DAY))
+            val circ = artProcessor.getCircadianTheme(currentMinuteOfDay())
             return WallpaperColors(
                 Color.valueOf(circ.primary),
                 Color.valueOf(circ.secondary),
@@ -190,9 +230,7 @@ class BeatWallService : WallpaperService() {
             super.onSurfaceChanged(holder, format, w, h)
             width = w.coerceAtLeast(1)
             height = h.coerceAtLeast(1)
-            // Unified Lock Screen lyrics zone: 46%–83% (below compact header, above emergency text/Now Bar)
             lockLyricsClip.set(0f, height * 0.46f, width.toFloat(), height * 0.83f)
-            // Unified Home Screen lyrics zone: 32%–72%
             homeLyricsClip.set(0f, height * 0.32f, width.toFloat(), height * 0.72f)
             rebuildLayoutsIfNeeded(force = true)
             if (visible) scheduleNextFrame()
@@ -211,10 +249,10 @@ class BeatWallService : WallpaperService() {
                 if (lastHiddenAtMs > 0L && (now - lastHiddenAtMs) > 3000L) {
                     proceduralAnimator.reroll(calmOnly = activeState == null)
                 }
-                // Async session refresh so app-switching stays 100% stutter-free while catching missed skips
                 mainHandler.post { tracker.refreshActiveSessions() }
                 snapToCurrentPosition()
-                scheduleNextFrame()
+                drawFrame(System.nanoTime())
+                updateLoopState()
             } else {
                 lastHiddenAtMs = SystemClock.elapsedRealtime()
                 stopLoop()
@@ -249,7 +287,8 @@ class BeatWallService : WallpaperService() {
             rebuildLayoutsIfNeeded(force = false)
             if (visible && powerManager.isInteractive) {
                 snapToCurrentPosition()
-                scheduleNextFrame()
+                drawFrame(System.nanoTime())
+                updateLoopState()
             }
         }
 
@@ -324,7 +363,10 @@ class BeatWallService : WallpaperService() {
 
         private fun needsAnimation(): Boolean {
             if (!visible || !surfaceReady || !powerManager.isInteractive) return false
-            // Always animate smoothly when visible (Circadian Ambient when idle, Karaoke+Animations when playing)
+            if (crossfadeProgress < 1f) return true
+            if (abs(targetLyricsAlpha - lyricsAlpha) > 0.01f) return true
+            // Low-Battery Auto-Stillness (<15% or Power Saver): hold static frame at 0 fps
+            if (isLowBattery) return false
             return true
         }
 
@@ -416,7 +458,7 @@ class BeatWallService : WallpaperService() {
                 }
             }
 
-            setSurface120Hz(true)
+            setSurface120Hz(needsAnimation())
             drawFrame(frameTimeNanos)
 
             if (needsAnimation()) {
@@ -462,12 +504,13 @@ class BeatWallService : WallpaperService() {
             val masterAlpha = (alphaFactor * 255).toInt().coerceIn(0, 255)
             val timeSec = frameTimeNanos / 1_000_000_000.0
 
-            // 1. Option A: Pure Circadian Ambient Mode when music is not playing
+            // 1. Pure Circadian Ambient Mode when music is not playing
             if (state == null) {
-                val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-                val circ = artProcessor.getCircadianTheme(hour)
-                drawBreathingBackdrop(canvas, circ.backdrop, true, timeSec, masterAlpha)
-                if (!isLock) {
+                val minOfDay = currentMinuteOfDay()
+                val circ = artProcessor.getCircadianTheme(minOfDay)
+                drawBreathingBackdrop(canvas, circ.backdrop, !isLowBattery, timeSec, masterAlpha)
+                drawSunMoonHorizonArc(canvas, minOfDay, timeSec, circ.accent, masterAlpha)
+                if (!isLock && !isLowBattery) {
                     proceduralAnimator.draw(
                         canvas = canvas,
                         width = width,
@@ -484,14 +527,14 @@ class BeatWallService : WallpaperService() {
 
             val art = state.processedArt
             if (art != null) {
-                drawBreathingBackdrop(canvas, art.blurredBackdrop, state.isPlaying, timeSec, masterAlpha)
+                drawBreathingBackdrop(canvas, art.blurredBackdrop, state.isPlaying && !isLowBattery, timeSec, masterAlpha)
             }
 
             val accent = art?.lyricAccentColor ?: 0xFF7DD3FC.toInt()
             val primary = art?.primaryGlowColor ?: 0xFF38BDF8.toInt()
             val secondary = art?.secondaryGlowColor ?: 0xFF1E293B.toInt()
 
-            if (!isLock && state.isPlaying) {
+            if (!isLock && state.isPlaying && !isLowBattery) {
                 proceduralAnimator.draw(
                     canvas = canvas,
                     width = width,
@@ -504,8 +547,6 @@ class BeatWallService : WallpaperService() {
                 )
             }
 
-            // 2. Unified Sleek Compact Horizontal Header on BOTH Lock Screen and Home Screen
-            // Smoothly centers at ~43% when no lyrics, or sits cleanly at top of zone (34% Lock / 22% Home) when lyrics active
             val headerTop = if (isLock) {
                 height * (0.34f + (1f - lyricsAlpha) * 0.08f)
             } else {
@@ -515,7 +556,6 @@ class BeatWallService : WallpaperService() {
             val headerAlpha = (masterAlpha * headerFactor).toInt().coerceIn(0, 255)
             drawUnifiedCompactHeader(canvas, state, art, headerTop, timeSec, accent, primary, headerAlpha)
 
-            // 3. Lyrics Zone (Dynamic Line Spacing + Karaoke Sweep)
             val lyrAlpha = (masterAlpha * lyricsAlpha).toInt().coerceIn(0, 255)
             val layouts = if (isLock) lockLayouts else homeLayouts
             val centers = if (isLock) lockYCenters else homeYCenters
@@ -541,6 +581,55 @@ class BeatWallService : WallpaperService() {
                 )
                 canvas.restore()
             }
+        }
+
+        private fun drawSunMoonHorizonArc(
+            canvas: Canvas,
+            minuteOfDay: Int,
+            timeSec: Double,
+            accent: Int,
+            masterAlpha: Int
+        ) {
+            // Safe middle band: 36%–54% height
+            val arcW = width * 0.72f
+            val arcH = height * 0.24f
+            val cx = width * 0.5f
+            val cy = height * 0.54f
+            arcRect.set(cx - arcW / 2f, cy - arcH / 2f, cx + arcW / 2f, cy + arcH / 2f)
+
+            val chargePulse = if (isCharging) {
+                0.55f + 0.45f * ((sin(timeSec * 2.2) + 1.0) * 0.5).toFloat()
+            } else 1f
+            val arcColor = if (isCharging) 0xFF34D399.toInt() else accent
+
+            arcPaint.color = arcColor
+            arcPaint.alpha = (masterAlpha * (if (isCharging) 0.26f * chargePulse else 0.14f)).toInt()
+            canvas.drawArc(arcRect, 195f, 150f, false, arcPaint)
+
+            // Sun (06:00–18:00 = minutes 360..1080) or Moon (18:00–06:00)
+            val isDay = minuteOfDay in 360..1080
+            val frac = if (isDay) {
+                (minuteOfDay - 360).toFloat() / 720f
+            } else {
+                val m = if (minuteOfDay > 1080) minuteOfDay - 1080 else minuteOfDay + (1440 - 1080)
+                m.toFloat() / 720f
+            }.coerceIn(0f, 1f)
+
+            val angleRad = Math.toRadians(195.0 + frac * 150.0)
+            val orbX = cx + (arcW / 2f) * cos(angleRad).toFloat()
+            val orbY = cy + (arcH / 2f) * sin(angleRad).toFloat()
+            val glowR = width * 0.045f
+
+            orbPaint.shader = RadialGradient(
+                orbX, orbY, glowR,
+                intArrayOf((arcColor and 0x00FFFFFF) or (((masterAlpha * 0.45f).toInt()) shl 24), Color.TRANSPARENT),
+                null, Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(orbX, orbY, glowR, orbPaint)
+            orbPaint.shader = null
+            orbPaint.color = Color.WHITE
+            orbPaint.alpha = (masterAlpha * 0.72f).toInt()
+            canvas.drawCircle(orbX, orbY, width * 0.008f, orbPaint)
         }
 
         private fun drawBreathingBackdrop(
@@ -619,7 +708,7 @@ class BeatWallService : WallpaperService() {
                 headerArtistPaint
             )
 
-            if (state.isPlaying) {
+            if (state.isPlaying && !isLowBattery) {
                 drawMiniHeaderBars(canvas, timeSec, width * 0.88f, headerTop + thumbSize * 0.5f, accent, headerAlpha)
             }
 
@@ -734,7 +823,6 @@ class BeatWallService : WallpaperService() {
                         canvas.drawCircle(baseX + d * dotGap, dotY, dotRadius * (0.85f + 0.25f * wave), dotPaint)
                     }
                 } else if (isFocused) {
-                    // Apple Music-style horizontal chunk sweep across the active line
                     val lineStart = state.lyrics[i].timeMs
                     val nextStart = if (i + 1 < state.lyrics.size) state.lyrics[i + 1].timeMs else lineStart + 3500L
                     val lineDur = (nextStart - lineStart).coerceIn(800L, 4500L)
