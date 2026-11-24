@@ -3,6 +3,7 @@ package com.beatwall.lyrics
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
@@ -17,11 +18,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.security.MessageDigest
+import kotlin.math.abs
 
 data class ActiveTrackState(
     val trackKey: String,
@@ -249,13 +253,13 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         val pkg = controller.packageName
         val trackKey = "$pkg|$rawArtist|$rawTitle"
 
-        // Never use DISPLAY_ICON (Spotify's generic target placeholder) as album art!
         val rawCover: Bitmap? = meta.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: meta.getBitmap(MediaMetadata.METADATA_KEY_ART)
         val artUri: String? = meta.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
             ?: meta.getString(MediaMetadata.METADATA_KEY_ART_URI)
 
-        val artSig = "$trackKey|${rawCover != null}|${artUri ?: ""}"
+        val validRawCover = rawCover?.takeUnless { isSpotifyTargetPlaceholder(it) }
+        val artSig = "$trackKey|${validRawCover != null}|${artUri ?: ""}"
 
         if (trackKey == currentTrackKey && currentState != null &&
             (artLoadedForTrackKey == trackKey || artSig == currentArtSignature)
@@ -324,37 +328,101 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
             }
         }
 
-        if (rawCover != null || !artUri.isNullOrBlank()) {
-            artJob?.cancel()
-            artJob = scope.launch {
-                val bmp = withContext(Dispatchers.IO) {
-                    rawCover ?: loadBitmapFromUriCached(artUri)
-                } ?: return@launch
-                if (trackKey != currentTrackKey) return@launch
+        // Prefer ART_URI -> validRawCover -> iTunes HD Cover Search fallback
+        artJob?.cancel()
+        artJob = scope.launch {
+            val bmp = withContext(Dispatchers.IO) {
+                val fromUri = loadBitmapFromUriCached(artUri)?.takeUnless { isSpotifyTargetPlaceholder(it) }
+                fromUri ?: validRawCover ?: fetchItunesArtworkCached(clean.title, clean.artist)
+            } ?: return@launch
 
-                val processed = withContext(Dispatchers.Default) {
-                    artProcessor.process(bmp)
-                }
-                if (trackKey != currentTrackKey) return@launch
-                if (pkg == youtubePkg && (currentState?.trackKey != trackKey)) return@launch
+            if (trackKey != currentTrackKey) return@launch
 
-                artLoadedForTrackKey = trackKey
-                currentState = (currentState ?: ActiveTrackState(
-                    trackKey = trackKey,
-                    packageName = pkg,
-                    title = clean.title,
-                    artist = clean.artist,
-                    durationMs = durationMs,
-                    processedArt = null,
-                    lyrics = emptyList(),
-                    isPlaying = isPlaying,
-                    showLyrics = false,
-                    basePositionMs = basePos,
-                    lastUpdateElapsedMs = updateElapsed,
-                    playbackSpeed = speed
-                )).copy(processedArt = processed)
-                notifyListeners(currentState)
+            val processed = withContext(Dispatchers.Default) {
+                artProcessor.process(bmp)
             }
+            if (trackKey != currentTrackKey) return@launch
+            if (pkg == youtubePkg && (currentState?.trackKey != trackKey)) return@launch
+
+            artLoadedForTrackKey = trackKey
+            currentState = (currentState ?: ActiveTrackState(
+                trackKey = trackKey,
+                packageName = pkg,
+                title = clean.title,
+                artist = clean.artist,
+                durationMs = durationMs,
+                processedArt = null,
+                lyrics = emptyList(),
+                isPlaying = isPlaying,
+                showLyrics = false,
+                basePositionMs = basePos,
+                lastUpdateElapsedMs = updateElapsed,
+                playbackSpeed = speed
+            )).copy(processedArt = processed)
+            notifyListeners(currentState)
+        }
+    }
+
+    /**
+     * Detects Spotify's generic pure-grayscale concentric target placeholder icon.
+     */
+    private fun isSpotifyTargetPlaceholder(bmp: Bitmap): Boolean {
+        return try {
+            val w = bmp.width
+            val h = bmp.height
+            if (w < 16 || h < 16) return false
+            var grayCount = 0
+            val samples = 25
+            for (sy in 0 until 5) {
+                for (sx in 0 until 5) {
+                    val px = bmp.getPixel((w * (sx + 1)) / 6, (h * (sy + 1)) / 6)
+                    val r = Color.red(px)
+                    val g = Color.green(px)
+                    val b = Color.blue(px)
+                    if (maxOf(abs(r - g), abs(g - b), abs(r - b)) < 10) {
+                        grayCount++
+                    }
+                }
+            }
+            // Also check center pixel is near-black or near-white (target bullseye)
+            val center = bmp.getPixel(w / 2, h / 2)
+            val cMax = maxOf(Color.red(center), Color.green(center), Color.blue(center))
+            val cMin = minOf(Color.red(center), Color.green(center), Color.blue(center))
+            grayCount >= 24 && (cMax - cMin) < 10
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun fetchItunesArtworkCached(title: String, artist: String): Bitmap? {
+        if (title.isBlank()) return null
+        val cacheKey = sha256("itunes|$artist|$title")
+        val cached = File(artCacheDir, "$cacheKey.jpg")
+        if (cached.exists()) {
+            cached.setLastModified(System.currentTimeMillis())
+            BitmapFactory.decodeFile(cached.absolutePath)?.let { return it }
+        }
+        return try {
+            val q = URLEncoder.encode("$title $artist".trim(), "UTF-8")
+            val url = URL("https://itunes.apple.com/search?term=$q&entity=song&limit=1")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                connectTimeout = 2500
+                readTimeout = 2500
+            }
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            conn.disconnect()
+            val results = JSONObject(body).optJSONArray("results") ?: return null
+            if (results.length() == 0) return null
+            val art100 = results.getJSONObject(0).optString("artworkUrl100")
+            if (art100.isBlank()) return null
+            val art600 = art100.replace("100x100bb", "600x600bb")
+            val bmp = loadBitmapFromUriCached(art600) ?: return null
+            FileOutputStream(cached).use { out ->
+                bmp.compress(Bitmap.CompressFormat.JPEG, 92, out)
+            }
+            bmp
+        } catch (_: Exception) {
+            null
         }
     }
 

@@ -28,15 +28,18 @@ object TitleSanitizer {
             .replace(MULTI_SPACE, " ")
             .trim()
 
-        if (title.contains(" - ")) {
+        // Only split "Artist - Title" when artist is genuinely missing or a YouTube channel label
+        val isGenericChannel = artist.isEmpty() ||
+            artist.contains("T-Series", true) ||
+            artist.contains("Sony", true) ||
+            artist.contains("Zee", true) ||
+            artist.contains("Records", true)
+
+        if (isGenericChannel && title.contains(" - ")) {
             val parts = title.split(" - ", limit = 2)
             val left = parts[0].trim()
             val right = parts[1].trim()
-            if (left.isNotEmpty() && right.isNotEmpty() &&
-                (artist.isEmpty() || artist.contains("T-Series", true) ||
-                 artist.contains("Sony", true) || artist.contains("Zee", true) ||
-                 !title.contains(artist, true))
-            ) {
+            if (left.isNotEmpty() && right.isNotEmpty()) {
                 artist = left
                 title = right
             }
