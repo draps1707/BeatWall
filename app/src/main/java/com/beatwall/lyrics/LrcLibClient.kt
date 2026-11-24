@@ -16,6 +16,7 @@ class LrcLibClient(context: Context) {
     private val cacheDir = File(context.cacheDir, "lrc_cache").apply { mkdirs() }
     private val maxCacheFiles = 500
     private val memCache = LruCache<String, List<LyricLine>>(30)
+    private val anyParensRegex = Regex("""\s*[\(\[].*?[\)\]]""")
 
     suspend fun fetchSyncedLyrics(
         rawTitle: String,
@@ -38,16 +39,26 @@ class LrcLibClient(context: Context) {
         }
 
         val durationSec = if (durationMs > 0L) (durationMs / 1000L).toInt() else 0
-        var syncedLrc = queryGetEndpoint(clean.title, clean.artist, durationSec)
-
-        // Primary-artist fallback for multi-artist collabs & Bollywood tracks
         val primaryArtist = clean.artist.split(',', '&').firstOrNull()?.trim().orEmpty()
+        val strippedTitle = clean.title.replace(anyParensRegex, "").trim()
+
+        // Tier 1: LRCLIB (Exact -> Primary Artist -> Stripped Parenthetical -> Search)
+        var syncedLrc = queryGetEndpoint(clean.title, clean.artist, durationSec)
         if (syncedLrc.isNullOrBlank() && primaryArtist.isNotEmpty() && primaryArtist != clean.artist) {
             syncedLrc = queryGetEndpoint(clean.title, primaryArtist, durationSec)
         }
-
+        if (syncedLrc.isNullOrBlank() && strippedTitle.isNotEmpty() && strippedTitle != clean.title) {
+            syncedLrc = queryGetEndpoint(strippedTitle, primaryArtist.ifEmpty { clean.artist }, durationSec)
+        }
         if (syncedLrc.isNullOrBlank()) {
-            syncedLrc = querySearchEndpoint(clean.title, primaryArtist.ifEmpty { clean.artist }, durationSec)
+            val searchTitle = strippedTitle.ifEmpty { clean.title }
+            syncedLrc = querySearchEndpoint(searchTitle, primaryArtist.ifEmpty { clean.artist }, durationSec)
+        }
+
+        // Tier 2: SimpMusic Lyrics API (strong YouTube / Indian / devotional coverage)
+        if (syncedLrc.isNullOrBlank()) {
+            val searchTitle = strippedTitle.ifEmpty { clean.title }
+            syncedLrc = querySimpMusicApi(searchTitle, primaryArtist.ifEmpty { clean.artist }, durationSec)
         }
 
         trimCacheIfNeeded()
@@ -103,12 +114,40 @@ class LrcLibClient(context: Context) {
         }
     }
 
+    private fun querySimpMusicApi(title: String, artist: String, durationSec: Int): String? {
+        return try {
+            val q = URLEncoder.encode("$title $artist".trim(), "UTF-8")
+            val url = URL("https://api-lyrics.simpmusic.org/v1/search?q=$q")
+            val body = httpGet(url) ?: return null
+            val root = JSONObject(body)
+            val data = root.optJSONArray("data") ?: return null
+            var bestSynced: String? = null
+            var bestDiff = Int.MAX_VALUE
+            for (i in 0 until data.length()) {
+                val obj = data.getJSONObject(i)
+                val synced = obj.optString("syncedLyrics").takeIf { it.isNotBlank() && it != "null" }
+                    ?: obj.optString("lrc").takeIf { it.isNotBlank() && it != "null" }
+                    ?: continue
+                if (durationSec <= 0) return synced
+                val d = obj.optInt("duration", 0)
+                val diff = if (d > 0) kotlin.math.abs(d - durationSec) else 999
+                if (diff < bestDiff) {
+                    bestDiff = diff
+                    bestSynced = synced
+                }
+            }
+            bestSynced
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun httpGet(url: URL): String? {
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 2500
             readTimeout = 2500
-            setRequestProperty("User-Agent", "BeatWall/1.3.0 (https://github.com/beatwall)")
+            setRequestProperty("User-Agent", "BeatWall/1.6.0 (https://github.com/beatwall)")
         }
         return try {
             if (conn.responseCode == 200) {

@@ -27,16 +27,26 @@ data class ProcessedArt(
     val lyricAccentColor: Int
 )
 
+data class CircadianTheme(
+    val periodKey: Int,
+    val backdrop: Bitmap,
+    val primary: Int,
+    val secondary: Int,
+    val accent: Int
+)
+
 class ArtEffectProcessor {
     private val blurWidth = 360
     private val blurHeight = 780
     private val pool = arrayOf(
         Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888),
-        Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888)
+        Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB8888_COMPAT)
     )
     private var poolIdx = 0
 
-    // Pre-baked 128x128 matte analog film-grain shader (0% per-frame cost, eliminates OLED banding)
+    private val circadianBitmap = Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888)
+    private var cachedCircadianTheme: CircadianTheme? = null
+
     private val grainPaint = Paint().apply {
         val grainSize = 128
         val pixels = IntArray(grainSize * grainSize)
@@ -47,6 +57,58 @@ class ArtEffectProcessor {
         }
         val grainBmp = Bitmap.createBitmap(pixels, grainSize, grainSize, Bitmap.Config.ARGB_8888)
         shader = BitmapShader(grainBmp, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+    }
+
+    fun getCircadianTheme(hourOfDay: Int): CircadianTheme {
+        val period = when (hourOfDay) {
+            in 5..7 -> 0   // Dawn
+            in 8..16 -> 1  // Day
+            in 17..18 -> 2 // Dusk
+            else -> 3      // Night
+        }
+        cachedCircadianTheme?.takeIf { it.periodKey == period }?.let { return it }
+
+        val (primary, secondary, accent) = when (period) {
+            0 -> Triple(0xFF7C3AED.toInt(), 0xFFB45309.toInt(), 0xFFFDBA74.toInt()) // Dawn: Saffron-Rose & Indigo
+            1 -> Triple(0xFF0F766E.toInt(), 0xFF1E3A8A.toInt(), 0xFF7DD3FC.toInt()) // Day: Sapphire & Teal
+            2 -> Triple(0xFF9A3412.toInt(), 0xFF4C1D95.toInt(), 0xFFFCA5A5.toInt()) // Dusk: Burnt Amber & Violet
+            else -> Triple(0xFF1E293B.toInt(), 0xFF064E3B.toInt(), 0xFF6EE7B7.toInt()) // Night: OLED Midnight & Emerald
+        }
+
+        val canvas = Canvas(circadianBitmap)
+        canvas.drawColor(0xFF05060A.toInt())
+
+        val g1 = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = RadialGradient(
+                blurWidth * 0.28f, blurHeight * 0.30f, blurWidth * 1.05f,
+                intArrayOf(withAlpha(primary, 195), Color.TRANSPARENT),
+                null, Shader.TileMode.CLAMP
+            )
+        }
+        val g2 = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = RadialGradient(
+                blurWidth * 0.76f, blurHeight * 0.68f, blurWidth * 1.05f,
+                intArrayOf(withAlpha(secondary, 190), Color.TRANSPARENT),
+                null, Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), g1)
+        canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), g2)
+
+        val vignettePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = LinearGradient(
+                0f, 0f, 0f, blurHeight.toFloat(),
+                intArrayOf(0xAA040508.toInt(), 0x20000000, 0x20000000, 0xCC040508.toInt()),
+                floatArrayOf(0f, 0.28f, 0.72f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), vignettePaint)
+        canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), grainPaint)
+
+        return CircadianTheme(period, circadianBitmap, primary, secondary, accent).also {
+            cachedCircadianTheme = it
+        }
     }
 
     fun process(rawCover: Bitmap): ProcessedArt {
@@ -123,8 +185,6 @@ class ArtEffectProcessor {
             )
         }
         canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), vignettePaint)
-
-        // Matte analog film grain
         canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), grainPaint)
     }
 
@@ -199,5 +259,9 @@ class ArtEffectProcessor {
 
     private fun withAlpha(color: Int, alpha: Int): Int {
         return (color and 0x00FFFFFF) or ((alpha and 0xFF) shl 24)
+    }
+
+    companion object {
+        private val ARGB8888_COMPAT = Bitmap.Config.ARGB_8888
     }
 }

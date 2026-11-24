@@ -8,12 +8,15 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.service.wallpaper.WallpaperService
@@ -23,6 +26,7 @@ import android.text.TextPaint
 import android.view.Choreographer
 import android.view.Surface
 import android.view.SurfaceHolder
+import java.util.Calendar
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.sin
@@ -45,7 +49,9 @@ class BeatWallService : WallpaperService() {
         private val powerManager =
             getSystemService(Context.POWER_SERVICE) as PowerManager
         private val tracker = MediaSessionTracker.getInstance(applicationContext)
+        private val artProcessor = ArtEffectProcessor()
         private val choreographer = Choreographer.getInstance()
+        private val mainHandler = Handler(Looper.getMainLooper())
         private val proceduralAnimator = ProceduralAnimator()
 
         private var visible = false
@@ -65,6 +71,8 @@ class BeatWallService : WallpaperService() {
 
         private var lockLayouts: List<StaticLayout> = emptyList()
         private var homeLayouts: List<StaticLayout> = emptyList()
+        private var lockYCenters: FloatArray = FloatArray(0)
+        private var homeYCenters: FloatArray = FloatArray(0)
         private var measuredTrackKey: String? = null
 
         private var currentLineIndex = -1
@@ -96,26 +104,13 @@ class BeatWallService : WallpaperService() {
         private val animPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
-        // Swiss-style typographic tracking
-        private val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-            textAlign = Paint.Align.CENTER
-            letterSpacing = -0.02f
-        }
-        private val artistPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xCCFFFFFF.toInt()
-            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-            textAlign = Paint.Align.CENTER
-            letterSpacing = 0.02f
-        }
-        private val homeTitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        private val headerTitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
             typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
             textAlign = Paint.Align.LEFT
             letterSpacing = -0.02f
         }
-        private val homeArtistPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        private val headerArtistPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xB8FFFFFF.toInt()
             typeface = Typeface.create("sans-serif", Typeface.NORMAL)
             textAlign = Paint.Align.LEFT
@@ -127,7 +122,6 @@ class BeatWallService : WallpaperService() {
         }
 
         private val clipPath = Path()
-        private val artRect = RectF()
         private val miniArtRect = RectF()
         private val pillRect = RectF()
         private val backdropRect = RectF()
@@ -137,7 +131,7 @@ class BeatWallService : WallpaperService() {
         private val screenReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (intent?.action == Intent.ACTION_USER_PRESENT) {
-                    proceduralAnimator.reroll()
+                    proceduralAnimator.reroll(calmOnly = activeState == null)
                 }
                 if (visible && powerManager.isInteractive) {
                     snapToCurrentPosition()
@@ -168,11 +162,20 @@ class BeatWallService : WallpaperService() {
         }
 
         override fun onComputeColors(): WallpaperColors? {
-            val art = activeState?.processedArt ?: return super.onComputeColors()
+            val art = activeState?.processedArt
+            if (art != null) {
+                return WallpaperColors(
+                    Color.valueOf(art.primaryGlowColor),
+                    Color.valueOf(art.secondaryGlowColor),
+                    Color.valueOf(art.lyricAccentColor),
+                    WallpaperColors.HINT_SUPPORTS_DARK_TEXT
+                )
+            }
+            val circ = artProcessor.getCircadianTheme(Calendar.getInstance().get(Calendar.HOUR_OF_DAY))
             return WallpaperColors(
-                Color.valueOf(art.primaryGlowColor),
-                Color.valueOf(art.secondaryGlowColor),
-                Color.valueOf(art.lyricAccentColor),
+                Color.valueOf(circ.primary),
+                Color.valueOf(circ.secondary),
+                Color.valueOf(circ.accent),
                 WallpaperColors.HINT_SUPPORTS_DARK_TEXT
             )
         }
@@ -187,7 +190,9 @@ class BeatWallService : WallpaperService() {
             super.onSurfaceChanged(holder, format, w, h)
             width = w.coerceAtLeast(1)
             height = h.coerceAtLeast(1)
-            lockLyricsClip.set(0f, height * 0.625f, width.toFloat(), height * 0.825f)
+            // Unified Lock Screen lyrics zone: 46%–83% (below compact header, above emergency text/Now Bar)
+            lockLyricsClip.set(0f, height * 0.46f, width.toFloat(), height * 0.83f)
+            // Unified Home Screen lyrics zone: 32%–72%
             homeLyricsClip.set(0f, height * 0.32f, width.toFloat(), height * 0.72f)
             rebuildLayoutsIfNeeded(force = true)
             if (visible) scheduleNextFrame()
@@ -204,8 +209,10 @@ class BeatWallService : WallpaperService() {
             if (visible && powerManager.isInteractive) {
                 val now = SystemClock.elapsedRealtime()
                 if (lastHiddenAtMs > 0L && (now - lastHiddenAtMs) > 3000L) {
-                    proceduralAnimator.reroll()
+                    proceduralAnimator.reroll(calmOnly = activeState == null)
                 }
+                // Async session refresh so app-switching stays 100% stutter-free while catching missed skips
+                mainHandler.post { tracker.refreshActiveSessions() }
                 snapToCurrentPosition()
                 scheduleNextFrame()
             } else {
@@ -218,7 +225,7 @@ class BeatWallService : WallpaperService() {
             val prevKey = activeState?.trackKey
             val newKey = state?.trackKey
             val artChanged = activeState?.processedArt !== state?.processedArt
-            if (prevKey != newKey && prevKey != null) {
+            if (prevKey != newKey) {
                 prevState = activeState
                 crossfadeProgress = 0f
                 crossfadeStartMs = SystemClock.elapsedRealtime()
@@ -226,12 +233,12 @@ class BeatWallService : WallpaperService() {
                 springY = 0f
                 springVelocity = 0f
                 targetY = 0f
-                proceduralAnimator.reroll()
+                proceduralAnimator.reroll(calmOnly = state == null)
             }
             activeState = state
             targetLyricsAlpha = if (state?.showLyrics == true && state.lyrics.isNotEmpty()) 1f else 0f
-            if (prevKey == null) {
-                lyricsAlpha = targetLyricsAlpha
+            if (prevKey == null && state == null) {
+                lyricsAlpha = 0f
             }
             if (artChanged) {
                 try {
@@ -246,16 +253,17 @@ class BeatWallService : WallpaperService() {
             }
         }
 
-        private fun lineStepPx(): Float = height * 0.056f
-
         private fun snapToCurrentPosition() {
             val st = activeState ?: return
             if (st.lyrics.isEmpty()) return
             val idx = LrcParser.findLineIndex(st.lyrics, st.currentPositionMs())
             currentLineIndex = idx
-            targetY = idx.coerceAtLeast(0) * lineStepPx()
-            springY = targetY
-            springVelocity = 0f
+            val centers = if (keyguardManager.isKeyguardLocked) lockYCenters else homeYCenters
+            if (idx in centers.indices) {
+                targetY = centers[idx]
+                springY = targetY
+                springVelocity = 0f
+            }
         }
 
         private fun rebuildLayoutsIfNeeded(force: Boolean) {
@@ -263,44 +271,61 @@ class BeatWallService : WallpaperService() {
             if (st == null || st.lyrics.isEmpty()) {
                 lockLayouts = emptyList()
                 homeLayouts = emptyList()
+                lockYCenters = FloatArray(0)
+                homeYCenters = FloatArray(0)
                 measuredTrackKey = null
                 return
             }
             if (!force && measuredTrackKey == st.trackKey) return
             measuredTrackKey = st.trackKey
 
-            val lockWidth = (width * 0.84f).toInt().coerceAtLeast(200)
-            val homeWidth = (width * 0.80f).toInt().coerceAtLeast(200)
+            val contentW = (width * 0.82f).toInt().coerceAtLeast(200)
             activeLyricPaint.textSize = width * 0.052f
+            val lineGap = height * 0.022f
 
             lockLayouts = st.lyrics.map { line ->
-                StaticLayout.Builder.obtain(line.text, 0, line.text.length, activeLyricPaint, lockWidth)
+                StaticLayout.Builder.obtain(line.text, 0, line.text.length, activeLyricPaint, contentW)
                     .setAlignment(Layout.Alignment.ALIGN_CENTER)
                     .setBreakStrategy(Layout.BREAK_STRATEGY_BALANCED)
                     .setLineSpacing(4f, 1.04f)
                     .setIncludePad(true)
-                    .setMaxLines(2)
+                    .setMaxLines(3)
                     .build()
             }
             homeLayouts = st.lyrics.map { line ->
-                StaticLayout.Builder.obtain(line.text, 0, line.text.length, activeLyricPaint, homeWidth)
+                StaticLayout.Builder.obtain(line.text, 0, line.text.length, activeLyricPaint, contentW)
                     .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                     .setBreakStrategy(Layout.BREAK_STRATEGY_BALANCED)
                     .setLineSpacing(4f, 1.04f)
                     .setIncludePad(true)
-                    .setMaxLines(2)
+                    .setMaxLines(3)
                     .build()
             }
+
+            lockYCenters = computeYCenters(lockLayouts, lineGap)
+            homeYCenters = computeYCenters(homeLayouts, lineGap)
+        }
+
+        private fun computeYCenters(layouts: List<StaticLayout>, gap: Float): FloatArray {
+            val centers = FloatArray(layouts.size)
+            var y = 0f
+            for (i in layouts.indices) {
+                val h = layouts[i].height.toFloat()
+                if (i == 0) {
+                    centers[i] = 0f
+                    y = h / 2f + gap
+                } else {
+                    centers[i] = y + h / 2f
+                    y += h + gap
+                }
+            }
+            return centers
         }
 
         private fun needsAnimation(): Boolean {
             if (!visible || !surfaceReady || !powerManager.isInteractive) return false
-            if (crossfadeProgress < 1f) return true
-            if (abs(targetLyricsAlpha - lyricsAlpha) > 0.01f) return true
-            val st = activeState ?: return false
-            if (st.isPlaying) return true
-            val springMoving = abs(targetY - springY) > 0.4f || abs(springVelocity) > 1f
-            return springMoving
+            // Always animate smoothly when visible (Circadian Ambient when idle, Karaoke+Animations when playing)
+            return true
         }
 
         private fun scheduleNextFrame() {
@@ -371,12 +396,13 @@ class BeatWallService : WallpaperService() {
             }
 
             val st = activeState
-            val lineStep = lineStepPx()
-            if (st != null && st.lyrics.isNotEmpty() && st.showLyrics) {
+            val isLock = keyguardManager.isKeyguardLocked
+            val centers = if (isLock) lockYCenters else homeYCenters
+            if (st != null && st.lyrics.isNotEmpty() && st.showLyrics && centers.isNotEmpty()) {
                 val newIdx = LrcParser.findLineIndex(st.lyrics, st.currentPositionMs())
                 if (newIdx != currentLineIndex) {
                     currentLineIndex = newIdx
-                    targetY = newIdx.coerceAtLeast(0) * lineStep
+                    targetY = if (newIdx in centers.indices) centers[newIdx] else 0f
                 }
                 val diff = targetY - springY
                 if (abs(diff) > 0.35f || abs(springVelocity) > 1f) {
@@ -390,7 +416,7 @@ class BeatWallService : WallpaperService() {
                 }
             }
 
-            setSurface120Hz(needsAnimation())
+            setSurface120Hz(true)
             drawFrame(frameTimeNanos)
 
             if (needsAnimation()) {
@@ -412,13 +438,10 @@ class BeatWallService : WallpaperService() {
                 canvas.drawColor(0xFF05060A.toInt())
 
                 if (crossfadeProgress < 1f && prevState != null) {
-                    drawState(canvas, prevState, isLock, 1f - crossfadeProgress, 1f, frameTimeNanos)
-                    // Tactile 0.96x -> 1.00x ease-out micro-zoom on incoming track
-                    val eased = 1f - (1f - crossfadeProgress) * (1f - crossfadeProgress)
-                    val artZoom = 0.96f + 0.04f * eased
-                    drawState(canvas, activeState, isLock, crossfadeProgress, artZoom, frameTimeNanos)
+                    drawState(canvas, prevState, isLock, 1f - crossfadeProgress, frameTimeNanos)
+                    drawState(canvas, activeState, isLock, crossfadeProgress, frameTimeNanos)
                 } else {
-                    drawState(canvas, activeState, isLock, 1f, 1f, frameTimeNanos)
+                    drawState(canvas, activeState, isLock, 1f, frameTimeNanos)
                 }
             } finally {
                 try {
@@ -433,142 +456,42 @@ class BeatWallService : WallpaperService() {
             state: ActiveTrackState?,
             isLock: Boolean,
             alphaFactor: Float,
-            artZoom: Float,
             frameTimeNanos: Long
         ) {
-            if (alphaFactor <= 0.01f || state == null) return
+            if (alphaFactor <= 0.01f) return
             val masterAlpha = (alphaFactor * 255).toInt().coerceIn(0, 255)
             val timeSec = frameTimeNanos / 1_000_000_000.0
 
+            // 1. Option A: Pure Circadian Ambient Mode when music is not playing
+            if (state == null) {
+                val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+                val circ = artProcessor.getCircadianTheme(hour)
+                drawBreathingBackdrop(canvas, circ.backdrop, true, timeSec, masterAlpha)
+                if (!isLock) {
+                    proceduralAnimator.draw(
+                        canvas = canvas,
+                        width = width,
+                        height = height,
+                        timeSec = timeSec,
+                        accent = circ.accent,
+                        primary = circ.primary,
+                        secondary = circ.secondary,
+                        masterAlpha = masterAlpha
+                    )
+                }
+                return
+            }
+
             val art = state.processedArt
             if (art != null) {
-                // Slow 14-second Living Canvas backdrop breath (1.00x <-> 1.035x)
-                val breath = if (state.isPlaying) {
-                    1.0f + 0.0175f * (1f + sin(timeSec * (2.0 * PI / 14.0)).toFloat())
-                } else 1.0f
-                val extraW = width * (breath - 1f) * 0.5f
-                val extraH = height * (breath - 1f) * 0.5f
-                backdropRect.set(-extraW, -extraH, width + extraW, height + extraH)
-                bmpPaint.alpha = masterAlpha
-                canvas.drawBitmap(art.blurredBackdrop, null, backdropRect, bmpPaint)
+                drawBreathingBackdrop(canvas, art.blurredBackdrop, state.isPlaying, timeSec, masterAlpha)
             }
 
-            if (isLock) {
-                drawLockScreenAppleMusic(canvas, state, art, masterAlpha, artZoom, frameTimeNanos)
-            } else {
-                drawHomeScreenDynamic(canvas, state, art, masterAlpha, frameTimeNanos)
-            }
-        }
-
-        private fun drawColoredBacklight(
-            canvas: Canvas,
-            cx: Float,
-            cy: Float,
-            radius: Float,
-            glowColor: Int,
-            alpha: Int
-        ) {
-            backlightPaint.shader = RadialGradient(
-                cx, cy, radius,
-                intArrayOf((glowColor and 0x00FFFFFF) or (((alpha * 0.36f).toInt()) shl 24), Color.TRANSPARENT),
-                null, Shader.TileMode.CLAMP
-            )
-            canvas.drawCircle(cx, cy, radius, backlightPaint)
-            backlightPaint.shader = null
-        }
-
-        private fun drawLockScreenAppleMusic(
-            canvas: Canvas,
-            state: ActiveTrackState,
-            art: ProcessedArt?,
-            masterAlpha: Int,
-            artZoom: Float,
-            frameTimeNanos: Long
-        ) {
-            val accent = art?.lyricAccentColor ?: 0xFF7DD3FC.toInt()
-            val primary = art?.primaryGlowColor ?: 0xFF38BDF8.toInt()
-            val posterShift = (1f - lyricsAlpha) * 0.055f
-
-            if (art != null) {
-                val artSize = width * 0.42f
-                val cx = width / 2f
-                val cy = height * (0.335f + posterShift) + artSize / 2f
-
-                // Colored gallery backlight behind cover
-                drawColoredBacklight(canvas, cx, cy, artSize * 0.85f, primary, masterAlpha)
-
-                canvas.save()
-                canvas.scale(artZoom, artZoom, cx, cy)
-                val left = cx - artSize / 2f
-                val top = cy - artSize / 2f
-                artRect.set(left, top, left + artSize, top + artSize)
-                val radius = artSize * 0.08f
-
-                shadowPaint.alpha = masterAlpha
-                canvas.drawRoundRect(artRect, radius, radius, shadowPaint)
-
-                canvas.save()
-                clipPath.reset()
-                clipPath.addRoundRect(artRect, radius, radius, Path.Direction.CW)
-                canvas.clipPath(clipPath)
-                bmpPaint.alpha = masterAlpha
-                canvas.drawBitmap(art.coverArt, null, artRect, bmpPaint)
-                canvas.restore()
-
-                rimPaint.alpha = (masterAlpha * 0.28f).toInt()
-                canvas.drawRoundRect(artRect, radius, radius, rimPaint)
-                canvas.restore()
-            }
-
-            titlePaint.textSize = width * 0.044f
-            titlePaint.alpha = masterAlpha
-            artistPaint.textSize = width * 0.034f
-            artistPaint.alpha = (masterAlpha * 0.82f).toInt()
-
-            val titleY = height * (0.562f + posterShift)
-            canvas.drawText(ellipsize(state.title, titlePaint, width * 0.82f), width / 2f, titleY, titlePaint)
-            canvas.drawText(ellipsize(state.artist, artistPaint, width * 0.78f), width / 2f, titleY + width * 0.045f, artistPaint)
-
-            if (state.durationMs > 0L && state.isPlaying) {
-                val barW = width * 0.42f
-                val barLeft = (width - barW) / 2f
-                val barTop = height * (0.602f + posterShift)
-                drawProgressHairline(canvas, barLeft, barTop, barW, state.progressFraction(), accent, masterAlpha)
-            }
-
-            val lyrAlpha = (masterAlpha * lyricsAlpha).toInt().coerceIn(0, 255)
-            if (lyrAlpha > 3 && lockLayouts.isNotEmpty()) {
-                canvas.save()
-                canvas.clipRect(lockLyricsClip)
-                drawWindowedLyrics(
-                    canvas = canvas,
-                    layouts = lockLayouts,
-                    lyrics = state.lyrics,
-                    centerX = width * 0.08f,
-                    centerY = height * 0.725f,
-                    clipTop = lockLyricsClip.top,
-                    clipBottom = lockLyricsClip.bottom,
-                    accentColor = accent,
-                    masterAlpha = lyrAlpha,
-                    frameTimeNanos = frameTimeNanos
-                )
-                canvas.restore()
-            }
-        }
-
-        private fun drawHomeScreenDynamic(
-            canvas: Canvas,
-            state: ActiveTrackState,
-            art: ProcessedArt?,
-            masterAlpha: Int,
-            frameTimeNanos: Long
-        ) {
             val accent = art?.lyricAccentColor ?: 0xFF7DD3FC.toInt()
             val primary = art?.primaryGlowColor ?: 0xFF38BDF8.toInt()
             val secondary = art?.secondaryGlowColor ?: 0xFF1E293B.toInt()
-            val timeSec = frameTimeNanos / 1_000_000_000.0
 
-            if (state.isPlaying) {
+            if (!isLock && state.isPlaying) {
                 proceduralAnimator.draw(
                     canvas = canvas,
                     width = width,
@@ -581,24 +504,86 @@ class BeatWallService : WallpaperService() {
                 )
             }
 
-            val headerFactor = if (state.isPlaying) 1f else 0.45f
+            // 2. Unified Sleek Compact Horizontal Header on BOTH Lock Screen and Home Screen
+            // Smoothly centers at ~43% when no lyrics, or sits cleanly at top of zone (34% Lock / 22% Home) when lyrics active
+            val headerTop = if (isLock) {
+                height * (0.34f + (1f - lyricsAlpha) * 0.08f)
+            } else {
+                height * (0.22f + (1f - lyricsAlpha) * 0.21f)
+            }
+            val headerFactor = if (state.isPlaying) 1f else 0.55f
             val headerAlpha = (masterAlpha * headerFactor).toInt().coerceIn(0, 255)
+            drawUnifiedCompactHeader(canvas, state, art, headerTop, timeSec, accent, primary, headerAlpha)
+
+            // 3. Lyrics Zone (Dynamic Line Spacing + Karaoke Sweep)
+            val lyrAlpha = (masterAlpha * lyricsAlpha).toInt().coerceIn(0, 255)
+            val layouts = if (isLock) lockLayouts else homeLayouts
+            val centers = if (isLock) lockYCenters else homeYCenters
+            val clipRect = if (isLock) lockLyricsClip else homeLyricsClip
+            val centerY = if (isLock) height * 0.645f else height * 0.525f
+            val centerX = width * 0.09f
+
+            if (lyrAlpha > 3 && layouts.isNotEmpty() && centers.isNotEmpty()) {
+                canvas.save()
+                canvas.clipRect(clipRect)
+                drawWindowedKaraokeLyrics(
+                    canvas = canvas,
+                    state = state,
+                    layouts = layouts,
+                    yCenters = centers,
+                    centerX = centerX,
+                    centerY = centerY,
+                    clipTop = clipRect.top,
+                    clipBottom = clipRect.bottom,
+                    accentColor = accent,
+                    masterAlpha = lyrAlpha,
+                    frameTimeNanos = frameTimeNanos
+                )
+                canvas.restore()
+            }
+        }
+
+        private fun drawBreathingBackdrop(
+            canvas: Canvas,
+            bmp: android.graphics.Bitmap,
+            animate: Boolean,
+            timeSec: Double,
+            alpha: Int
+        ) {
+            val breath = if (animate) {
+                1.0f + 0.0175f * (1f + sin(timeSec * (2.0 * PI / 14.0)).toFloat())
+            } else 1.0f
+            val extraW = width * (breath - 1f) * 0.5f
+            val extraH = height * (breath - 1f) * 0.5f
+            backdropRect.set(-extraW, -extraH, width + extraW, height + extraH)
+            bmpPaint.alpha = alpha
+            canvas.drawBitmap(bmp, null, backdropRect, bmpPaint)
+        }
+
+        private fun drawUnifiedCompactHeader(
+            canvas: Canvas,
+            state: ActiveTrackState,
+            art: ProcessedArt?,
+            headerTop: Float,
+            timeSec: Double,
+            accent: Int,
+            primary: Int,
+            headerAlpha: Int
+        ) {
             val leftMargin = width * 0.085f
             val thumbSize = width * 0.135f
-            val headerTop = height * 0.22f
 
             if (art != null) {
                 miniArtRect.set(leftMargin, headerTop, leftMargin + thumbSize, headerTop + thumbSize)
-                drawColoredBacklight(
-                    canvas,
-                    miniArtRect.centerX(),
-                    miniArtRect.centerY(),
-                    thumbSize * 1.1f,
-                    primary,
-                    headerAlpha
+                backlightPaint.shader = RadialGradient(
+                    miniArtRect.centerX(), miniArtRect.centerY(), thumbSize * 1.15f,
+                    intArrayOf((primary and 0x00FFFFFF) or (((headerAlpha * 0.36f).toInt()) shl 24), Color.TRANSPARENT),
+                    null, Shader.TileMode.CLAMP
                 )
-                val radius = thumbSize * 0.18f
+                canvas.drawCircle(miniArtRect.centerX(), miniArtRect.centerY(), thumbSize * 1.15f, backlightPaint)
+                backlightPaint.shader = null
 
+                val radius = thumbSize * 0.18f
                 shadowPaint.alpha = headerAlpha
                 canvas.drawRoundRect(miniArtRect, radius, radius, shadowPaint)
 
@@ -616,22 +601,22 @@ class BeatWallService : WallpaperService() {
 
             val textLeft = leftMargin + thumbSize + width * 0.038f
             val maxTextW = width * 0.52f
-            homeTitlePaint.textSize = width * 0.041f
-            homeTitlePaint.alpha = headerAlpha
-            homeArtistPaint.textSize = width * 0.032f
-            homeArtistPaint.alpha = (headerAlpha * 0.78f).toInt()
+            headerTitlePaint.textSize = width * 0.041f
+            headerTitlePaint.alpha = headerAlpha
+            headerArtistPaint.textSize = width * 0.032f
+            headerArtistPaint.alpha = (headerAlpha * 0.78f).toInt()
 
             canvas.drawText(
-                ellipsize(state.title, homeTitlePaint, maxTextW),
+                ellipsize(state.title, headerTitlePaint, maxTextW),
                 textLeft,
                 headerTop + thumbSize * 0.44f,
-                homeTitlePaint
+                headerTitlePaint
             )
             canvas.drawText(
-                ellipsize(state.artist, homeArtistPaint, maxTextW),
+                ellipsize(state.artist, headerArtistPaint, maxTextW),
                 textLeft,
                 headerTop + thumbSize * 0.80f,
-                homeArtistPaint
+                headerArtistPaint
             )
 
             if (state.isPlaying) {
@@ -642,25 +627,6 @@ class BeatWallService : WallpaperService() {
                 val barTop = headerTop + thumbSize + height * 0.014f
                 val barW = width * 0.83f
                 drawProgressHairline(canvas, leftMargin, barTop, barW, state.progressFraction(), accent, headerAlpha)
-            }
-
-            val lyrAlpha = (masterAlpha * lyricsAlpha).toInt().coerceIn(0, 255)
-            if (lyrAlpha > 3 && homeLayouts.isNotEmpty()) {
-                canvas.save()
-                canvas.clipRect(homeLyricsClip)
-                drawWindowedLyrics(
-                    canvas = canvas,
-                    layouts = homeLayouts,
-                    lyrics = state.lyrics,
-                    centerX = leftMargin,
-                    centerY = height * 0.52f,
-                    clipTop = homeLyricsClip.top,
-                    clipBottom = homeLyricsClip.bottom,
-                    accentColor = accent,
-                    masterAlpha = lyrAlpha,
-                    frameTimeNanos = frameTimeNanos
-                )
-                canvas.restore()
             }
         }
 
@@ -711,10 +677,11 @@ class BeatWallService : WallpaperService() {
             }
         }
 
-        private fun drawWindowedLyrics(
+        private fun drawWindowedKaraokeLyrics(
             canvas: Canvas,
+            state: ActiveTrackState,
             layouts: List<StaticLayout>,
-            lyrics: List<LyricLine>,
+            yCenters: FloatArray,
             centerX: Float,
             centerY: Float,
             clipTop: Float,
@@ -723,40 +690,38 @@ class BeatWallService : WallpaperService() {
             masterAlpha: Int,
             frameTimeNanos: Long
         ) {
-            val lineStep = lineStepPx()
             val activeIdx = currentLineIndex.coerceAtLeast(0)
-            val start = (activeIdx - 1).coerceAtLeast(0)
-            val end = (activeIdx + 1).coerceAtMost(layouts.lastIndex)
+            val start = (activeIdx - 2).coerceAtLeast(0)
+            val end = (activeIdx + 2).coerceAtMost(layouts.lastIndex)
             val timeSec = frameTimeNanos / 1_000_000_000.0
             val mistZone = (clipBottom - clipTop) * 0.22f
+            val posMs = state.currentPositionMs()
 
             for (i in start..end) {
                 val layout = layouts[i]
-                val lineOffset = (i * lineStep) - springY
+                val lineOffset = yCenters[i] - springY
                 val yPos = centerY + lineOffset - (layout.height / 2f)
                 val lineCenterY = yPos + layout.height / 2f
 
-                // Soft mist dissolve near top & bottom of lyric window
                 val topFade = ((lineCenterY - clipTop) / mistZone).coerceIn(0f, 1f)
                 val botFade = ((clipBottom - lineCenterY) / mistZone).coerceIn(0f, 1f)
                 val mistFactor = minOf(topFade, botFade)
+                if (mistFactor <= 0.02f) continue
 
-                // 180ms pre-beat warmup: smooth focus factor from 0.40 -> 1.00 as dist -> 0
-                val dist = abs(lineOffset) / lineStep
-                val focusStrength = (1f - (dist / 0.65f)).coerceIn(0f, 1f)
-                val alphaFactor = (0.40f + 0.60f * focusStrength) * mistFactor
+                val isFocused = i == activeIdx
+                val focusStrength = if (isFocused) 1f else 0f
+                val alphaFactor = (if (isFocused) 1f else 0.42f) * mistFactor
                 val lineAlpha = (masterAlpha * alphaFactor).toInt().coerceIn(0, 255)
                 if (lineAlpha <= 2) continue
 
                 canvas.save()
                 canvas.translate(centerX, yPos)
 
-                val scale = 1.0f + 0.08f * focusStrength
+                val scale = 1.0f + 0.07f * focusStrength
                 val pivotX = if (layout.alignment == Layout.Alignment.ALIGN_CENTER) layout.width / 2f else 0f
                 canvas.scale(scale, scale, pivotX, layout.height / 2f)
 
-                if (lyrics[i].isInterlude) {
-                    // Sequential breathing cadence (dot 1 -> dot 2 -> dot 3)
+                if (state.lyrics[i].isInterlude) {
                     dotPaint.color = accentColor
                     val dotRadius = width * 0.011f
                     val dotGap = width * 0.032f
@@ -768,18 +733,34 @@ class BeatWallService : WallpaperService() {
                         dotPaint.alpha = (lineAlpha * wave).toInt().coerceIn(20, 255)
                         canvas.drawCircle(baseX + d * dotGap, dotY, dotRadius * (0.85f + 0.25f * wave), dotPaint)
                     }
-                } else if (focusStrength > 0.35f) {
-                    layout.paint.style = Paint.Style.STROKE
-                    layout.paint.strokeWidth = 6f
-                    layout.paint.color = accentColor
-                    layout.paint.alpha = (lineAlpha * 0.34f * focusStrength).toInt()
-                    layout.draw(canvas)
+                } else if (isFocused) {
+                    // Apple Music-style horizontal chunk sweep across the active line
+                    val lineStart = state.lyrics[i].timeMs
+                    val nextStart = if (i + 1 < state.lyrics.size) state.lyrics[i + 1].timeMs else lineStart + 3500L
+                    val lineDur = (nextStart - lineStart).coerceIn(800L, 4500L)
+                    val sweepFrac = ((posMs - lineStart).toFloat() / (lineDur * 0.88f)).coerceIn(0.05f, 1.0f)
+
+                    val maxLineW = (0 until layout.lineCount).maxOfOrNull { layout.getLineWidth(it) } ?: layout.width.toFloat()
+                    val leftEdge = if (layout.alignment == Layout.Alignment.ALIGN_CENTER) {
+                        (layout.width - maxLineW) / 2f
+                    } else 0f
+                    val sweepX = leftEdge + maxLineW * sweepFrac
+                    val softEdge = (maxLineW * 0.14f).coerceAtLeast(24f)
+
+                    val brightWhite = (0xFFFFFF) or (lineAlpha shl 24)
+                    val dimWhite = (0xFFFFFF) or (((lineAlpha * 0.48f).toInt()) shl 24)
 
                     layout.paint.style = Paint.Style.FILL
-                    layout.paint.color = Color.WHITE
-                    layout.paint.alpha = lineAlpha
+                    layout.paint.shader = LinearGradient(
+                        sweepX - softEdge, 0f, sweepX + softEdge, 0f,
+                        intArrayOf(brightWhite, dimWhite),
+                        null,
+                        Shader.TileMode.CLAMP
+                    )
                     layout.draw(canvas)
+                    layout.paint.shader = null
                 } else {
+                    layout.paint.shader = null
                     layout.paint.style = Paint.Style.FILL
                     layout.paint.color = Color.WHITE
                     layout.paint.alpha = lineAlpha

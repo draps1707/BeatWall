@@ -14,10 +14,6 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.random.Random
 
-/**
- * Curated Gallery Edition: 12 Archetypes x 5 Secondary x 4 ColorModes x 3 Tempos x 4 Geometries x 3 Densities x 2 Directions
- * = 17,280 calm, museum-grade Home Screen ambient combinations in 28 bytes of RAM. Zero touch listeners.
- */
 data class AnimationDna(
     val archetype: Int,
     val secondary: Int,
@@ -30,27 +26,36 @@ data class AnimationDna(
 
 class ProceduralAnimator {
 
-    private var dna = rollRandom(-1)
+    private var dna = rollRandom(-1, calmOnly = false)
+    private val calmArchetypes = intArrayOf(1, 2, 3, 4, 5, 6, 9, 10)
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val rect = RectF()
     private val path = Path()
 
-    fun reroll() {
-        dna = rollRandom(dna.archetype)
+    fun reroll(calmOnly: Boolean = false) {
+        dna = rollRandom(dna.archetype, calmOnly)
     }
 
-    private fun rollRandom(avoidArchetype: Int): AnimationDna {
-        var arch = Random.nextInt(12)
+    private fun rollRandom(avoidArchetype: Int, calmOnly: Boolean): AnimationDna {
+        var arch = if (calmOnly) {
+            calmArchetypes[Random.nextInt(calmArchetypes.size)]
+        } else {
+            Random.nextInt(12)
+        }
         if (arch == avoidArchetype) {
-            arch = (arch + 1 + Random.nextInt(11)) % 12
+            arch = if (calmOnly) {
+                calmArchetypes[(calmArchetypes.indexOf(arch) + 1) % calmArchetypes.size]
+            } else {
+                (arch + 1 + Random.nextInt(11)) % 12
+            }
         }
         return AnimationDna(
             archetype = arch,
             secondary = Random.nextInt(5),
             colorMode = Random.nextInt(4),
-            tempoIdx = Random.nextInt(3),
+            tempoIdx = if (calmOnly) 0 else Random.nextInt(3),
             geometry = Random.nextInt(4),
             densityIdx = Random.nextInt(3),
             direction = if (Random.nextBoolean()) 1 else -1
@@ -68,7 +73,7 @@ class ProceduralAnimator {
         masterAlpha: Int
     ) {
         val tempo = when (dna.tempoIdx) {
-            0 -> 0.55
+            0 -> 0.50
             1 -> 0.85
             else -> 1.15
         }
@@ -199,8 +204,8 @@ class ProceduralAnimator {
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
         strokePaint.shader = null
-        val cx = if (dna.geometry == 1) w * 0.5f else (w * 0.085f + w * 0.0675f)
-        val cy = if (dna.geometry == 1) h * 0.52f else (h * 0.22f + w * 0.0675f)
+        val cx = w * 0.5f
+        val cy = h * 0.50f
         val rings = (3 * density).toInt().coerceIn(2, 4)
         for (i in 0 until rings) {
             val p = (((t * 0.32 + i.toDouble() / rings) % 1.0) + 1.0) % 1.0
@@ -208,7 +213,7 @@ class ProceduralAnimator {
             strokePaint.color = if (i % 2 == 0) c1 else c2
             strokePaint.strokeWidth = 2.2f
             strokePaint.alpha = (alpha * 0.24f * (1f - pf)).toInt().coerceIn(0, 255)
-            canvas.drawCircle(cx, cy, w * (0.08f + pf * 0.25f), strokePaint)
+            canvas.drawCircle(cx, cy, w * (0.08f + pf * 0.28f), strokePaint)
         }
     }
 

@@ -17,7 +17,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -62,7 +61,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         "com.google.android.youtube"
     )
     private val youtubePkg = "com.google.android.youtube"
-    private val pauseGraceMs = 15_000L
+    private val pauseGraceMs = 60_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -70,7 +69,6 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         appContext.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
     private val lrcClient = LrcLibClient(appContext)
     private val artProcessor = ArtEffectProcessor()
-    private val lastCoverStore = LastCoverStore(appContext)
     private val artCacheDir = File(appContext.cacheDir, "art_cache").apply { mkdirs() }
     private val maxArtCacheFiles = 100
 
@@ -79,34 +77,18 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
     private var lyricsJob: Job? = null
     private var artJob: Job? = null
     private var currentTrackKey: String? = null
+    private var artLoadedForTrackKey: String? = null
     private var currentArtSignature: String? = null
     private var currentState: ActiveTrackState? = null
     private var sessionsRegistered = false
 
-    init {
-        lastCoverStore.load()?.let { saved ->
-            val processed = artProcessor.process(saved.cover)
-            saved.cover.recycle()
-            currentState = ActiveTrackState(
-                trackKey = "restored",
-                packageName = "",
-                title = saved.title,
-                artist = saved.artist,
-                durationMs = 0L,
-                processedArt = processed,
-                lyrics = emptyList(),
-                isPlaying = false,
-                showLyrics = false,
-                basePositionMs = 0L,
-                lastUpdateElapsedMs = 0L,
-                playbackSpeed = 1.0f
-            )
-        }
-    }
-
     private val pauseTimeoutRunnable = Runnable {
-        currentState = currentState?.copy(isPlaying = false, showLyrics = false)
-        notifyListeners(currentState)
+        // Option A: After 60s pause, smoothly transition to Pure Circadian Ambient Mode
+        currentTrackKey = null
+        artLoadedForTrackKey = null
+        currentArtSignature = null
+        currentState = null
+        notifyListeners(null)
     }
 
     private val sessionsChangedListener =
@@ -182,8 +164,11 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
 
         if (chosen == null) {
             mainHandler.removeCallbacks(pauseTimeoutRunnable)
-            currentState = currentState?.copy(isPlaying = false, showLyrics = false)
-            notifyListeners(currentState)
+            currentTrackKey = null
+            artLoadedForTrackKey = null
+            currentArtSignature = null
+            currentState = null
+            notifyListeners(null)
             return
         }
 
@@ -204,13 +189,16 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
             mainHandler.postDelayed(pauseTimeoutRunnable, pauseGraceMs)
         } else if (stateCode == PlaybackState.STATE_STOPPED || stateCode == PlaybackState.STATE_NONE) {
             mainHandler.removeCallbacks(pauseTimeoutRunnable)
-            currentState = currentState?.copy(isPlaying = false, showLyrics = false)
-            notifyListeners(currentState)
+            currentTrackKey = null
+            artLoadedForTrackKey = null
+            currentArtSignature = null
+            currentState = null
+            notifyListeners(null)
             return
         }
 
         val existing = currentState
-        if (existing == null || existing.trackKey == "restored") {
+        if (existing == null) {
             handleControllerUpdate(controller)
             return
         }
@@ -236,8 +224,11 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
 
         if (stateCode == PlaybackState.STATE_STOPPED || stateCode == PlaybackState.STATE_NONE) {
             mainHandler.removeCallbacks(pauseTimeoutRunnable)
-            currentState = currentState?.copy(isPlaying = false, showLyrics = false)
-            notifyListeners(currentState)
+            currentTrackKey = null
+            artLoadedForTrackKey = null
+            currentArtSignature = null
+            currentState = null
+            notifyListeners(null)
             return
         }
 
@@ -268,8 +259,9 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
 
         val artSig = "$trackKey|${rawCover != null}|${artUri ?: ""}"
 
+        // Only skip if THIS EXACT trackKey already loaded its own artwork!
         if (trackKey == currentTrackKey && currentState != null &&
-            (currentState?.processedArt != null || artSig == currentArtSignature)
+            (artLoadedForTrackKey == trackKey || artSig == currentArtSignature)
         ) {
             handlePlaybackStateOnly(pb)
             return
@@ -278,6 +270,9 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         val isNewTrack = trackKey != currentTrackKey
         currentTrackKey = trackKey
         currentArtSignature = artSig
+        if (isNewTrack) {
+            artLoadedForTrackKey = null
+        }
 
         val clean = TitleSanitizer.clean(rawTitle, rawArtist)
         val basePos = (pb?.position ?: 0L).coerceAtLeast(0L)
@@ -341,12 +336,12 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
                 if (trackKey != currentTrackKey) return@launch
 
                 val processed = withContext(Dispatchers.Default) {
-                    lastCoverStore.save(clean.title, clean.artist, bmp)
                     artProcessor.process(bmp)
                 }
                 if (trackKey != currentTrackKey) return@launch
                 if (pkg == youtubePkg && (currentState?.trackKey != trackKey)) return@launch
 
+                artLoadedForTrackKey = trackKey
                 currentState = (currentState ?: ActiveTrackState(
                     trackKey = trackKey,
                     packageName = pkg,
