@@ -30,7 +30,6 @@ import android.view.SurfaceHolder
 import java.util.Calendar
 import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.sin
 
 class BeatWallService : WallpaperService() {
@@ -101,11 +100,6 @@ class BeatWallService : WallpaperService() {
             color = 0x38FFFFFF
             strokeWidth = 2.5f
         }
-        private val arcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 3f
-            strokeCap = Paint.Cap.ROUND
-        }
         private val orbPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val progressTrackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
@@ -135,10 +129,11 @@ class BeatWallService : WallpaperService() {
         }
 
         private val clipPath = Path()
+        private val moonPath = Path()
+        private val moonCutPath = Path()
         private val miniArtRect = RectF()
         private val pillRect = RectF()
         private val backdropRect = RectF()
-        private val arcRect = RectF()
         private val lockLyricsClip = RectF()
         private val homeLyricsClip = RectF()
 
@@ -205,18 +200,18 @@ class BeatWallService : WallpaperService() {
             val art = activeState?.processedArt
             if (art != null) {
                 return WallpaperColors(
+                    Color.valueOf(art.lyricAccentColor),
                     Color.valueOf(art.primaryGlowColor),
                     Color.valueOf(art.secondaryGlowColor),
-                    Color.valueOf(art.lyricAccentColor),
-                    WallpaperColors.HINT_SUPPORTS_DARK_TEXT
+                    WallpaperColors.HINT_SUPPORTS_DARK_THEME
                 )
             }
             val circ = artProcessor.getCircadianTheme(currentMinuteOfDay())
             return WallpaperColors(
+                Color.valueOf(circ.accent),
                 Color.valueOf(circ.primary),
                 Color.valueOf(circ.secondary),
-                Color.valueOf(circ.accent),
-                WallpaperColors.HINT_SUPPORTS_DARK_TEXT
+                WallpaperColors.HINT_SUPPORTS_DARK_THEME
             )
         }
 
@@ -365,7 +360,6 @@ class BeatWallService : WallpaperService() {
             if (!visible || !surfaceReady || !powerManager.isInteractive) return false
             if (crossfadeProgress < 1f) return true
             if (abs(targetLyricsAlpha - lyricsAlpha) > 0.01f) return true
-            // Low-Battery Auto-Stillness (<15% or Power Saver): hold static frame at 0 fps
             if (isLowBattery) return false
             return true
         }
@@ -504,12 +498,11 @@ class BeatWallService : WallpaperService() {
             val masterAlpha = (alphaFactor * 255).toInt().coerceIn(0, 255)
             val timeSec = frameTimeNanos / 1_000_000_000.0
 
-            // 1. Pure Circadian Ambient Mode when music is not playing
             if (state == null) {
                 val minOfDay = currentMinuteOfDay()
                 val circ = artProcessor.getCircadianTheme(minOfDay)
                 drawBreathingBackdrop(canvas, circ.backdrop, !isLowBattery, timeSec, masterAlpha)
-                drawSunMoonHorizonArc(canvas, minOfDay, timeSec, circ.accent, masterAlpha)
+                drawSkyCelestialOrb(canvas, minOfDay, isLock, timeSec, circ.accent, masterAlpha)
                 if (!isLock && !isLowBattery) {
                     proceduralAnimator.draw(
                         canvas = canvas,
@@ -547,11 +540,7 @@ class BeatWallService : WallpaperService() {
                 )
             }
 
-            val headerTop = if (isLock) {
-                height * (0.34f + (1f - lyricsAlpha) * 0.08f)
-            } else {
-                height * (0.22f + (1f - lyricsAlpha) * 0.21f)
-            }
+            val headerTop = if (isLock) height * 0.34f else height * 0.22f
             val headerFactor = if (state.isPlaying) 1f else 0.55f
             val headerAlpha = (masterAlpha * headerFactor).toInt().coerceIn(0, 255)
             drawUnifiedCompactHeader(canvas, state, art, headerTop, timeSec, accent, primary, headerAlpha)
@@ -583,30 +572,14 @@ class BeatWallService : WallpaperService() {
             }
         }
 
-        private fun drawSunMoonHorizonArc(
+        private fun drawSkyCelestialOrb(
             canvas: Canvas,
             minuteOfDay: Int,
+            isLock: Boolean,
             timeSec: Double,
             accent: Int,
             masterAlpha: Int
         ) {
-            // Safe middle band: 36%–54% height
-            val arcW = width * 0.72f
-            val arcH = height * 0.24f
-            val cx = width * 0.5f
-            val cy = height * 0.54f
-            arcRect.set(cx - arcW / 2f, cy - arcH / 2f, cx + arcW / 2f, cy + arcH / 2f)
-
-            val chargePulse = if (isCharging) {
-                0.55f + 0.45f * ((sin(timeSec * 2.2) + 1.0) * 0.5).toFloat()
-            } else 1f
-            val arcColor = if (isCharging) 0xFF34D399.toInt() else accent
-
-            arcPaint.color = arcColor
-            arcPaint.alpha = (masterAlpha * (if (isCharging) 0.26f * chargePulse else 0.14f)).toInt()
-            canvas.drawArc(arcRect, 195f, 150f, false, arcPaint)
-
-            // Sun (06:00–18:00 = minutes 360..1080) or Moon (18:00–06:00)
             val isDay = minuteOfDay in 360..1080
             val frac = if (isDay) {
                 (minuteOfDay - 360).toFloat() / 720f
@@ -615,21 +588,55 @@ class BeatWallService : WallpaperService() {
                 m.toFloat() / 720f
             }.coerceIn(0f, 1f)
 
-            val angleRad = Math.toRadians(195.0 + frac * 150.0)
-            val orbX = cx + (arcW / 2f) * cos(angleRad).toFloat()
-            val orbY = cy + (arcH / 2f) * sin(angleRad).toFloat()
-            val glowR = width * 0.045f
+            val orbX = width * (0.15f + 0.70f * frac)
+            val arcLift = sin(frac * PI).toFloat()
+            val orbY = if (isLock) {
+                height * (0.135f - 0.055f * arcLift)
+            } else {
+                height * (0.23f - 0.11f * arcLift)
+            }
+
+            val baseOrbColor = if (isCharging) {
+                0xFF34D399.toInt()
+            } else if (isDay) {
+                0xFFFBBF24.toInt()
+            } else {
+                accent
+            }
+
+            val pulse = if (isCharging) 0.75f + 0.25f * sin(timeSec * 2.2).toFloat() else 1f
+            val glowR = width * 0.085f
 
             orbPaint.shader = RadialGradient(
                 orbX, orbY, glowR,
-                intArrayOf((arcColor and 0x00FFFFFF) or (((masterAlpha * 0.45f).toInt()) shl 24), Color.TRANSPARENT),
+                intArrayOf(
+                    (baseOrbColor and 0x00FFFFFF) or (((masterAlpha * 0.48f * pulse).toInt()) shl 24),
+                    (baseOrbColor and 0x00FFFFFF) or (((masterAlpha * 0.14f * pulse).toInt()) shl 24),
+                    Color.TRANSPARENT
+                ),
                 null, Shader.TileMode.CLAMP
             )
             canvas.drawCircle(orbX, orbY, glowR, orbPaint)
             orbPaint.shader = null
-            orbPaint.color = Color.WHITE
-            orbPaint.alpha = (masterAlpha * 0.72f).toInt()
-            canvas.drawCircle(orbX, orbY, width * 0.008f, orbPaint)
+
+            if (isDay) {
+                // Crisp glowing Sun disc
+                orbPaint.color = 0xFFFEF3C7.toInt()
+                orbPaint.alpha = (masterAlpha * 0.90f).toInt()
+                canvas.drawCircle(orbX, orbY, width * 0.017f, orbPaint)
+            } else {
+                // Crisp Crescent Moon shape (pre-allocated Path difference)
+                val r = width * 0.022f
+                moonPath.reset()
+                moonPath.addCircle(orbX, orbY, r, Path.Direction.CW)
+                moonCutPath.reset()
+                moonCutPath.addCircle(orbX + r * 0.42f, orbY - r * 0.28f, r * 0.86f, Path.Direction.CW)
+                moonPath.op(moonCutPath, Path.Op.DIFFERENCE)
+
+                orbPaint.color = Color.WHITE
+                orbPaint.alpha = (masterAlpha * 0.90f).toInt()
+                canvas.drawPath(moonPath, orbPaint)
+            }
         }
 
         private fun drawBreathingBackdrop(

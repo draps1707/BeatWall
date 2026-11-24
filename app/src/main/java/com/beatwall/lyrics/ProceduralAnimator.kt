@@ -136,10 +136,10 @@ class ProceduralAnimator {
 
         for (i in 0 until count) {
             val freq = 2.0 + i * 0.35
-            val nL = 0.28f + 0.72f * ((sin(t * freq + i * 0.9) + 1.0) * 0.5).toFloat()
-            val nR = 0.28f + 0.72f * ((cos(t * freq + i * 1.1) + 1.0) * 0.5).toFloat()
+            val nL = 0.35f + 0.65f * ((sin(t * freq + i * 0.9) + 1.0) * 0.5).toFloat()
+            val nR = 0.35f + 0.65f * ((cos(t * freq + i * 1.1) + 1.0) * 0.5).toFloat()
             paint.color = if (i % 2 == 0) c1 else c2
-            paint.alpha = (alpha * 0.18f).toInt()
+            paint.alpha = (alpha * 0.20f).toInt()
 
             if (dna.geometry == 1 || dna.geometry == 3) {
                 val totalW = count * 2 * (barW + gap)
@@ -212,7 +212,7 @@ class ProceduralAnimator {
             val pf = p.toFloat()
             strokePaint.color = if (i % 2 == 0) c1 else c2
             strokePaint.strokeWidth = 2.2f
-            strokePaint.alpha = (alpha * 0.24f * (1f - pf)).toInt().coerceIn(0, 255)
+            strokePaint.alpha = (alpha * (0.09f + 0.16f * (1f - pf))).toInt().coerceIn(0, 255)
             canvas.drawCircle(cx, cy, w * (0.08f + pf * 0.28f), strokePaint)
         }
     }
@@ -235,7 +235,7 @@ class ProceduralAnimator {
                 x = w * ((i * 0.618f) % 0.88f + 0.06f) + sin(t * 0.9 + i).toFloat() * (w * 0.025f)
                 y = h * (0.76f - prog.toFloat() * 0.56f)
             }
-            val twinkle = 0.35f + 0.65f * ((sin(t * 2.4 + i * 1.7) + 1.0) * 0.5).toFloat()
+            val twinkle = 0.40f + 0.60f * ((sin(t * 2.4 + i * 1.7) + 1.0) * 0.5).toFloat()
             paint.color = if (i % 3 == 0) c2 else c1
             paint.alpha = (alpha * 0.28f * twinkle).toInt().coerceIn(0, 255)
             canvas.drawCircle(x, y, w * (0.003f + (i % 3) * 0.0015f), paint)
@@ -330,9 +330,9 @@ class ProceduralAnimator {
                 for (col in 0 until 6) {
                     val x = w * (0.18f + col * 0.128f)
                     val y = h * (0.36f + row * 0.08f)
-                    val wave = ((sin(t * 2.0 - (row + col) * 0.6) + 1.0) * 0.5).toFloat()
+                    val wave = 0.35f + 0.65f * ((sin(t * 2.0 - (row + col) * 0.6) + 1.0) * 0.5).toFloat()
                     paint.color = if ((row + col) % 2 == 0) c1 else c2
-                    paint.alpha = (alpha * (0.06f + 0.16f * wave)).toInt()
+                    paint.alpha = (alpha * 0.20f * wave).toInt()
                     canvas.drawCircle(x, y, w * (0.003f + wave * 0.004f), paint)
                 }
             }
@@ -389,7 +389,7 @@ class ProceduralAnimator {
             val cy = h * (0.38f + ((i * 0.29f) % 0.24f))
             strokePaint.color = if (i % 2 == 0) c1 else c2
             strokePaint.strokeWidth = 2.2f
-            strokePaint.alpha = (alpha * 0.22f * (1f - pf)).toInt().coerceIn(0, 255)
+            strokePaint.alpha = (alpha * (0.08f + 0.15f * (1f - pf))).toInt().coerceIn(0, 255)
             canvas.drawCircle(cx, cy, w * (0.04f + pf * 0.22f), strokePaint)
         }
     }
@@ -403,13 +403,13 @@ class ProceduralAnimator {
                 paint.shader = null
                 paint.color = Color.WHITE
                 for (i in 0 until 7) {
-                    val tw = ((sin(t * 2.2 + i * 1.4) + 1.0) * 0.5).toFloat()
+                    val tw = 0.35f + 0.65f * ((sin(t * 2.2 + i * 1.4) + 1.0) * 0.5).toFloat()
                     paint.alpha = (alpha * 0.18f * tw).toInt()
                     canvas.drawCircle(w * ((i * 0.31f) % 0.85f + 0.08f), h * (0.28f + (i * 0.06f)), 2.5f, paint)
                 }
             }
             2 -> {
-                val p = ((sin(t * 1.1) + 1.0) * 0.5).toFloat()
+                val p = 0.35f + 0.65f * ((sin(t * 1.1) + 1.0) * 0.5).toFloat()
                 strokePaint.shader = null
                 strokePaint.color = c1
                 strokePaint.strokeWidth = 3f
@@ -418,7 +418,7 @@ class ProceduralAnimator {
                 canvas.drawLine(w - 2f, h * 0.22f, w - 2f, h * 0.72f, strokePaint)
             }
             3 -> {
-                val p = ((sin(t * 1.0) + 1.0) * 0.5).toFloat()
+                val p = 0.35f + 0.65f * ((sin(t * 1.0) + 1.0) * 0.5).toFloat()
                 strokePaint.shader = null
                 strokePaint.color = c2
                 strokePaint.strokeWidth = 2f

@@ -83,7 +83,6 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
     private var sessionsRegistered = false
 
     private val pauseTimeoutRunnable = Runnable {
-        // Option A: After 60s pause, smoothly transition to Pure Circadian Ambient Mode
         currentTrackKey = null
         artLoadedForTrackKey = null
         currentArtSignature = null
@@ -250,16 +249,14 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         val pkg = controller.packageName
         val trackKey = "$pkg|$rawArtist|$rawTitle"
 
+        // Never use DISPLAY_ICON (Spotify's generic target placeholder) as album art!
         val rawCover: Bitmap? = meta.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: meta.getBitmap(MediaMetadata.METADATA_KEY_ART)
-            ?: meta.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
         val artUri: String? = meta.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
             ?: meta.getString(MediaMetadata.METADATA_KEY_ART_URI)
-            ?: meta.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)
 
         val artSig = "$trackKey|${rawCover != null}|${artUri ?: ""}"
 
-        // Only skip if THIS EXACT trackKey already loaded its own artwork!
         if (trackKey == currentTrackKey && currentState != null &&
             (artLoadedForTrackKey == trackKey || artSig == currentArtSignature)
         ) {
