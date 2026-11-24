@@ -1,6 +1,7 @@
 package com.beatwall.lyrics
 
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.HardwareRenderer
@@ -16,6 +17,7 @@ import android.hardware.HardwareBuffer
 import android.media.ImageReader
 import androidx.palette.graphics.Palette
 import kotlin.math.max
+import kotlin.random.Random
 
 data class ProcessedArt(
     val coverArt: Bitmap,
@@ -33,6 +35,19 @@ class ArtEffectProcessor {
         Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888)
     )
     private var poolIdx = 0
+
+    // Pre-baked 128x128 matte analog film-grain shader (0% per-frame cost, eliminates OLED banding)
+    private val grainPaint = Paint().apply {
+        val grainSize = 128
+        val pixels = IntArray(grainSize * grainSize)
+        val rng = Random(1707)
+        for (i in pixels.indices) {
+            val v = rng.nextInt(256)
+            pixels[i] = Color.argb(10, v, v, v)
+        }
+        val grainBmp = Bitmap.createBitmap(pixels, grainSize, grainSize, Bitmap.Config.ARGB_8888)
+        shader = BitmapShader(grainBmp, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+    }
 
     fun process(rawCover: Bitmap): ProcessedArt {
         val palette = Palette.from(rawCover).maximumColorCount(16).generate()
@@ -82,7 +97,6 @@ class ArtEffectProcessor {
             blurred.recycle()
         }
 
-        // Lush 2-color ambient radial glows
         val glowPaint1 = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = RadialGradient(
                 blurWidth * 0.25f, blurHeight * 0.32f, blurWidth * 1.0f,
@@ -100,7 +114,6 @@ class ArtEffectProcessor {
         canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), glowPaint1)
         canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), glowPaint2)
 
-        // Glossy OLED edge vignette (deep near-black at top & bottom for clock/dock legibility)
         val vignettePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = LinearGradient(
                 0f, 0f, 0f, blurHeight.toFloat(),
@@ -110,6 +123,9 @@ class ArtEffectProcessor {
             )
         }
         canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), vignettePaint)
+
+        // Matte analog film grain
+        canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), grainPaint)
     }
 
     private fun gpuBlurToBitmap(src: Bitmap, w: Int, h: Int, radius: Float): Bitmap? {

@@ -9,14 +9,14 @@ import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import kotlin.math.PI
-import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.random.Random
 
 /**
- * 12 Archetypes x 5 Secondary x 4 ColorModes x 3 Tempos x 4 Geometries x 3 Densities x 2 Directions
- * = 17,280 unique Home Screen animations in 28 bytes of RAM + 4-slot Touch Ripple pool.
+ * Curated Gallery Edition: 12 Archetypes x 5 Secondary x 4 ColorModes x 3 Tempos x 4 Geometries x 3 Densities x 2 Directions
+ * = 17,280 calm, museum-grade Home Screen ambient combinations in 28 bytes of RAM. Zero touch listeners.
  */
 data class AnimationDna(
     val archetype: Int,
@@ -30,19 +30,8 @@ data class AnimationDna(
 
 class ProceduralAnimator {
 
-    private class TouchRipple {
-        var x = 0f
-        var y = 0f
-        var startTimeSec = -10.0
-    }
-
-    private val ripples = Array(4) { TouchRipple() }
-    private var rippleCursor = 0
-    private val rippleDurationSec = 0.75
-
     private var dna = rollRandom(-1)
 
-    // Pre-allocated drawing objects (zero per-frame allocations)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val rect = RectF()
@@ -68,37 +57,6 @@ class ProceduralAnimator {
         )
     }
 
-    fun onTouch(x: Float, y: Float, timeSec: Double) {
-        val r = ripples[rippleCursor]
-        r.x = x
-        r.y = y
-        r.startTimeSec = timeSec
-        rippleCursor = (rippleCursor + 1) % ripples.size
-    }
-
-    fun hasActiveRipples(timeSec: Double): Boolean {
-        for (r in ripples) {
-            val age = timeSec - r.startTimeSec
-            if (age in 0.0..rippleDurationSec) return true
-        }
-        return false
-    }
-
-    fun drawTouchRipples(canvas: Canvas, timeSec: Double, accent: Int, width: Int, masterAlpha: Int) {
-        strokePaint.shader = null
-        strokePaint.color = accent
-        for (r in ripples) {
-            val age = timeSec - r.startTimeSec
-            if (age < 0.0 || age > rippleDurationSec) continue
-            val p = (age / rippleDurationSec).toFloat()
-            val eased = 1f - (1f - p) * (1f - p)
-            val radius = width * (0.04f + eased * 0.28f)
-            strokePaint.strokeWidth = (1f - p) * 7f + 1.5f
-            strokePaint.alpha = (masterAlpha * 0.45f * (1f - p)).toInt().coerceIn(0, 255)
-            canvas.drawCircle(r.x, r.y, radius, strokePaint)
-        }
-    }
-
     fun draw(
         canvas: Canvas,
         width: Int,
@@ -110,15 +68,15 @@ class ProceduralAnimator {
         masterAlpha: Int
     ) {
         val tempo = when (dna.tempoIdx) {
-            0 -> 0.65
-            1 -> 1.0
-            else -> 1.45
+            0 -> 0.55
+            1 -> 0.85
+            else -> 1.15
         }
         val t = timeSec * tempo * dna.direction
         val densityScale = when (dna.densityIdx) {
             0 -> 0.75f
             1 -> 1.0f
-            else -> 1.3f
+            else -> 1.25f
         }
 
         val c1 = pickColor1(accent, primary, secondary, t)
@@ -127,13 +85,13 @@ class ProceduralAnimator {
         when (dna.archetype) {
             0 -> drawPixelPills(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
             1 -> drawBokehOrbs(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
-            2 -> drawAuroraSweep(canvas, width, height, t, c1, c2, masterAlpha)
+            2 -> drawChiaroscuroAurora(canvas, width, height, t, c1, c2, masterAlpha)
             3 -> drawConcentricHalos(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
-            4 -> drawStarlightEmbers(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
-            5 -> drawWaveRibbons(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
-            6 -> drawGhostVinylArcs(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
-            7 -> drawEdgeLighting(canvas, width, height, t, c1, c2, masterAlpha)
-            8 -> drawMatrixAndRain(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
+            4 -> drawThermalDustMotes(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
+            5 -> drawSilkHarmonicRibbons(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
+            6 -> drawAstrolabeArcs(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
+            7 -> drawEdgeAtmosphere(canvas, width, height, t, c1, c2, masterAlpha)
+            8 -> drawRainAndConstellation(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
             9 -> drawLightPillars(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
             10 -> drawTwinMoons(canvas, width, height, t, c1, c2, masterAlpha)
             11 -> drawSonarRipples(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
@@ -149,7 +107,7 @@ class ProceduralAnimator {
             0 -> accent
             1 -> primary
             2 -> accent
-            else -> if (sin(t * 0.4) > 0) accent else primary
+            else -> if (sin(t * 0.35) > 0) accent else primary
         }
     }
 
@@ -162,32 +120,29 @@ class ProceduralAnimator {
         }
     }
 
-    // Archetype 0: Pixel Pill Equalizer (edges, bottom, or mirrored)
     private fun drawPixelPills(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
         paint.shader = null
-        val count = (6 * density).toInt().coerceIn(4, 9)
-        val barW = w * 0.020f
-        val gap = barW * 0.55f
-        val maxH = h * 0.13f
+        val count = (5 * density).toInt().coerceIn(4, 7)
+        val barW = w * 0.018f
+        val gap = barW * 0.65f
+        val maxH = h * 0.11f
 
         for (i in 0 until count) {
-            val freq = 2.4 + i * 0.42
-            val nL = 0.25f + 0.75f * ((sin(t * freq + i * 0.9) + 1.0) * 0.5).toFloat()
-            val nR = 0.25f + 0.75f * ((cos(t * freq + i * 1.1) + 1.0) * 0.5).toFloat()
+            val freq = 2.0 + i * 0.35
+            val nL = 0.28f + 0.72f * ((sin(t * freq + i * 0.9) + 1.0) * 0.5).toFloat()
+            val nR = 0.28f + 0.72f * ((cos(t * freq + i * 1.1) + 1.0) * 0.5).toFloat()
             paint.color = if (i % 2 == 0) c1 else c2
-            paint.alpha = (alpha * 0.23f).toInt()
+            paint.alpha = (alpha * 0.18f).toInt()
 
             if (dna.geometry == 1 || dna.geometry == 3) {
-                // Bottom horizon pills above search bar
                 val totalW = count * 2 * (barW + gap)
                 val x = (w - totalW) / 2f + i * 2 * (barW + gap)
-                val bh = maxH * 0.55f * nL
+                val bh = maxH * 0.50f * nL
                 rect.set(x, h * 0.72f - bh, x + barW, h * 0.72f)
                 canvas.drawRoundRect(rect, barW / 2f, barW / 2f, paint)
             } else {
-                // Flanking left & right edges
                 val yBase = h * 0.52f
                 val hL = maxH * nL
                 val xL = i * (barW + gap) - barW * 0.3f
@@ -202,39 +157,37 @@ class ProceduralAnimator {
         }
     }
 
-    // Archetype 1: Floating Bokeh Orbs
     private fun drawBokehOrbs(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
-        val count = (6 * density).toInt().coerceIn(4, 9)
+        val count = (5 * density).toInt().coerceIn(4, 8)
         for (i in 0 until count) {
-            val prog = (((t * (0.05 + i * 0.012)) + i * 0.17) % 1.0 + 1.0) % 1.0
+            val prog = (((t * (0.045 + i * 0.011)) + i * 0.17) % 1.0 + 1.0) % 1.0
             val cy = h * (0.76f - prog.toFloat() * 0.56f)
-            val baseX = if (dna.geometry == 0) (if (i % 2 == 0) 0.2f else 0.8f) else (0.14f + (i * 0.72f / count))
-            val cx = w * baseX + sin(t * 0.8 + i).toFloat() * (w * 0.06f)
-            val r = w * (0.09f + (i % 3) * 0.035f)
+            val baseX = if (dna.geometry == 0) (if (i % 2 == 0) 0.22f else 0.78f) else (0.16f + (i * 0.68f / count))
+            val cx = w * baseX + sin(t * 0.7 + i).toFloat() * (w * 0.05f)
+            val r = w * (0.10f + (i % 3) * 0.035f)
             val col = if (i % 2 == 0) c1 else c2
             paint.shader = RadialGradient(
                 cx, cy, r,
-                intArrayOf((col and 0x00FFFFFF) or (((alpha * 0.22f).toInt()) shl 24), Color.TRANSPARENT),
+                intArrayOf((col and 0x00FFFFFF) or (((alpha * 0.20f).toInt()) shl 24), Color.TRANSPARENT),
                 null, Shader.TileMode.CLAMP
             )
             canvas.drawCircle(cx, cy, r, paint)
         }
     }
 
-    // Archetype 2: Ambient Aurora Sweep
-    private fun drawAuroraSweep(canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, alpha: Int) {
-        val sx = sin(t * 0.45).toFloat() * (w * 0.22f)
-        val sy = cos(t * 0.35).toFloat() * (h * 0.10f)
+    private fun drawChiaroscuroAurora(canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, alpha: Int) {
+        val sx = sin(t * 0.38).toFloat() * (w * 0.22f)
+        val sy = cos(t * 0.28).toFloat() * (h * 0.10f)
         val cx = w * 0.5f + sx
         val cy = h * 0.48f + sy
-        val r = w * 0.78f
+        val r = w * 0.80f
         paint.shader = RadialGradient(
             cx, cy, r,
             intArrayOf(
-                (c1 and 0x00FFFFFF) or (((alpha * 0.26f).toInt()) shl 24),
-                (c2 and 0x00FFFFFF) or (((alpha * 0.12f).toInt()) shl 24),
+                (c1 and 0x00FFFFFF) or (((alpha * 0.24f).toInt()) shl 24),
+                (c2 and 0x00FFFFFF) or (((alpha * 0.10f).toInt()) shl 24),
                 Color.TRANSPARENT
             ),
             null, Shader.TileMode.CLAMP
@@ -242,53 +195,49 @@ class ProceduralAnimator {
         canvas.drawCircle(cx, cy, r, paint)
     }
 
-    // Archetype 3: Concentric Halos
     private fun drawConcentricHalos(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
         strokePaint.shader = null
         val cx = if (dna.geometry == 1) w * 0.5f else (w * 0.085f + w * 0.0675f)
         val cy = if (dna.geometry == 1) h * 0.52f else (h * 0.22f + w * 0.0675f)
-        val rings = (3 * density).toInt().coerceIn(2, 5)
+        val rings = (3 * density).toInt().coerceIn(2, 4)
         for (i in 0 until rings) {
-            val p = (((t * 0.38 + i.toDouble() / rings) % 1.0) + 1.0) % 1.0
+            val p = (((t * 0.32 + i.toDouble() / rings) % 1.0) + 1.0) % 1.0
             val pf = p.toFloat()
             strokePaint.color = if (i % 2 == 0) c1 else c2
-            strokePaint.strokeWidth = 3f
-            strokePaint.alpha = (alpha * 0.32f * (1f - pf)).toInt().coerceIn(0, 255)
-            canvas.drawCircle(cx, cy, w * (0.08f + pf * 0.26f), strokePaint)
+            strokePaint.strokeWidth = 2.2f
+            strokePaint.alpha = (alpha * 0.24f * (1f - pf)).toInt().coerceIn(0, 255)
+            canvas.drawCircle(cx, cy, w * (0.08f + pf * 0.25f), strokePaint)
         }
     }
 
-    // Archetype 4: Starlight / Embers / Golden Spiral
-    private fun drawStarlightEmbers(
+    private fun drawThermalDustMotes(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
         paint.shader = null
-        val count = (18 * density).toInt().coerceIn(12, 26)
+        val count = (16 * density).toInt().coerceIn(10, 22)
         for (i in 0 until count) {
-            val prog = (((t * (0.04 + (i % 5) * 0.015) + i * 0.13) % 1.0) + 1.0) % 1.0
+            val prog = (((t * (0.035 + (i % 5) * 0.012) + i * 0.13) % 1.0) + 1.0) % 1.0
             val x: Float
             val y: Float
             if (dna.geometry == 1) {
-                // Golden-angle spiral
-                val angle = i * 2.39996 + t * 0.35
-                val rad = w * 0.04f * kotlin.math.sqrt(i.toFloat() + 1f) * (0.85f + 0.15f * sin(t + i).toFloat())
+                val angle = i * 2.39996 + t * 0.28
+                val rad = w * 0.04f * sqrt(i.toFloat() + 1f) * (0.88f + 0.12f * sin(t + i).toFloat())
                 x = w * 0.5f + (cos(angle) * rad).toFloat()
                 y = h * 0.50f + (sin(angle) * rad).toFloat()
             } else {
-                x = w * ((i * 0.618f) % 0.88f + 0.06f) + sin(t * 1.1 + i).toFloat() * (w * 0.025f)
+                x = w * ((i * 0.618f) % 0.88f + 0.06f) + sin(t * 0.9 + i).toFloat() * (w * 0.025f)
                 y = h * (0.76f - prog.toFloat() * 0.56f)
             }
-            val twinkle = 0.35f + 0.65f * ((sin(t * 3.0 + i * 1.7) + 1.0) * 0.5).toFloat()
+            val twinkle = 0.35f + 0.65f * ((sin(t * 2.4 + i * 1.7) + 1.0) * 0.5).toFloat()
             paint.color = if (i % 3 == 0) c2 else c1
-            paint.alpha = (alpha * 0.36f * twinkle).toInt().coerceIn(0, 255)
-            canvas.drawCircle(x, y, w * (0.004f + (i % 3) * 0.002f), paint)
+            paint.alpha = (alpha * 0.28f * twinkle).toInt().coerceIn(0, 255)
+            canvas.drawCircle(x, y, w * (0.003f + (i % 3) * 0.0015f), paint)
         }
     }
 
-    // Archetype 5: Dual Sine Wave Ribbons / ECG Trace
-    private fun drawWaveRibbons(
+    private fun drawSilkHarmonicRibbons(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
         strokePaint.shader = null
@@ -296,110 +245,104 @@ class ProceduralAnimator {
         val baseY = if (dna.geometry == 3) h * 0.70f else h * 0.54f
         for (wv in 0 until waves) {
             path.reset()
-            val amp = h * (0.025f + wv * 0.012f)
-            val freq = 2.5 + wv * 1.1
+            val amp = h * (0.022f + wv * 0.011f)
+            val freq = 2.2 + wv * 0.9
             val steps = 28
             for (s in 0..steps) {
                 val frac = s.toFloat() / steps
                 val x = frac * w
                 val env = sin(frac * PI).toFloat()
-                val y = baseY + sin(frac * freq * PI + t * (2.2 + wv * 0.6)).toFloat() * amp * env
+                val y = baseY + sin(frac * freq * PI + t * (1.8 + wv * 0.5)).toFloat() * amp * env
                 if (s == 0) path.moveTo(x, y) else path.lineTo(x, y)
             }
             strokePaint.color = if (wv % 2 == 0) c1 else c2
-            strokePaint.strokeWidth = 3.5f
-            strokePaint.alpha = (alpha * 0.26f).toInt()
+            strokePaint.strokeWidth = 2.5f
+            strokePaint.alpha = (alpha * 0.22f).toInt()
             canvas.drawPath(path, strokePaint)
         }
     }
 
-    // Archetype 6: Ghost Vinyl / Pendulum Arcs
-    private fun drawGhostVinylArcs(
+    private fun drawAstrolabeArcs(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
         strokePaint.shader = null
         val cx = w * 0.5f
         val cy = h * 0.52f
-        val arcs = (4 * density).toInt().coerceIn(3, 6)
+        val arcs = (4 * density).toInt().coerceIn(3, 5)
         for (i in 0 until arcs) {
-            val r = w * (0.18f + i * 0.075f)
+            val r = w * (0.19f + i * 0.075f)
             rect.set(cx - r, cy - r, cx + r, cy + r)
             val startAngle = if (dna.geometry == 0) {
-                (sin(t * (0.8 + i * 0.2)) * 55.0).toFloat() - 90f
+                (sin(t * (0.7 + i * 0.18)) * 50.0).toFloat() - 90f
             } else {
-                ((t * (28.0 + i * 9.0) + i * 60.0) % 360.0).toFloat()
+                ((t * (22.0 + i * 7.0) + i * 65.0) % 360.0).toFloat()
             }
             strokePaint.color = if (i % 2 == 0) c1 else c2
-            strokePaint.strokeWidth = 3f
-            strokePaint.alpha = (alpha * 0.20f).toInt()
-            canvas.drawArc(rect, startAngle, 110f, false, strokePaint)
+            strokePaint.strokeWidth = 2.0f
+            strokePaint.alpha = (alpha * 0.18f).toInt()
+            canvas.drawArc(rect, startAngle, 105f, false, strokePaint)
         }
     }
 
-    // Archetype 7: S23 Ultra Curved Edge-Lighting Neon Glow
-    private fun drawEdgeLighting(canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, alpha: Int) {
-        val pulse = 0.45f + 0.55f * ((sin(t * 1.8) + 1.0) * 0.5).toFloat()
-        val edgeW = w * 0.06f
-        val edgeAlpha = (alpha * 0.30f * pulse).toInt().coerceIn(0, 255)
+    private fun drawEdgeAtmosphere(canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, alpha: Int) {
+        val pulse = 0.45f + 0.55f * ((sin(t * 1.4) + 1.0) * 0.5).toFloat()
+        val edgeW = w * 0.055f
+        val edgeAlpha = (alpha * 0.24f * pulse).toInt().coerceIn(0, 255)
 
         paint.shader = LinearGradient(
             0f, 0f, edgeW, 0f,
             intArrayOf((c1 and 0x00FFFFFF) or (edgeAlpha shl 24), Color.TRANSPARENT),
             null, Shader.TileMode.CLAMP
         )
-        canvas.drawRect(0f, h * 0.12f, edgeW, h * 0.85f, paint)
+        canvas.drawRect(0f, h * 0.14f, edgeW, h * 0.84f, paint)
 
         paint.shader = LinearGradient(
             w.toFloat(), 0f, w - edgeW, 0f,
             intArrayOf((c2 and 0x00FFFFFF) or (edgeAlpha shl 24), Color.TRANSPARENT),
             null, Shader.TileMode.CLAMP
         )
-        canvas.drawRect(w - edgeW, h * 0.12f, w.toFloat(), h * 0.85f, paint)
+        canvas.drawRect(w - edgeW, h * 0.14f, w.toFloat(), h * 0.84f, paint)
     }
 
-    // Archetype 8: Wave Dot Matrix / Night Rain Streaks
-    private fun drawMatrixAndRain(
+    private fun drawRainAndConstellation(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
         paint.shader = null
         if (dna.geometry == 2) {
-            // Diagonal rain streaks
-            val drops = (12 * density).toInt().coerceIn(8, 16)
+            val drops = (10 * density).toInt().coerceIn(7, 14)
             strokePaint.shader = null
-            strokePaint.strokeWidth = 2.5f
+            strokePaint.strokeWidth = 2.0f
             for (i in 0 until drops) {
-                val prog = (((t * 0.35 + i * 0.19) % 1.0) + 1.0) % 1.0
+                val prog = (((t * 0.28 + i * 0.19) % 1.0) + 1.0) % 1.0
                 val x = w * ((i * 0.23f) % 0.9f + 0.05f)
-                val y = h * (0.15f + prog.toFloat() * 0.65f)
+                val y = h * (0.16f + prog.toFloat() * 0.62f)
                 strokePaint.color = if (i % 2 == 0) c1 else c2
-                strokePaint.alpha = (alpha * 0.24f).toInt()
-                canvas.drawLine(x, y, x - w * 0.015f, y + h * 0.03f, strokePaint)
+                strokePaint.alpha = (alpha * 0.18f).toInt()
+                canvas.drawLine(x, y, x - w * 0.012f, y + h * 0.026f, strokePaint)
             }
         } else {
-            // Clean 6x4 Dot Matrix wave
             for (row in 0 until 4) {
                 for (col in 0 until 6) {
                     val x = w * (0.18f + col * 0.128f)
                     val y = h * (0.36f + row * 0.08f)
-                    val wave = ((sin(t * 2.4 - (row + col) * 0.6) + 1.0) * 0.5).toFloat()
+                    val wave = ((sin(t * 2.0 - (row + col) * 0.6) + 1.0) * 0.5).toFloat()
                     paint.color = if ((row + col) % 2 == 0) c1 else c2
-                    paint.alpha = (alpha * (0.08f + 0.22f * wave)).toInt()
-                    canvas.drawCircle(x, y, w * (0.004f + wave * 0.005f), paint)
+                    paint.alpha = (alpha * (0.06f + 0.16f * wave)).toInt()
+                    canvas.drawCircle(x, y, w * (0.003f + wave * 0.004f), paint)
                 }
             }
         }
     }
 
-    // Archetype 9: Swaying Vertical Light Pillars
     private fun drawLightPillars(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
-        val count = (4 * density).toInt().coerceIn(3, 6)
+        val count = (4 * density).toInt().coerceIn(3, 5)
         val pillarW = w * 0.16f
         for (i in 0 until count) {
-            val cx = w * (0.15f + i * (0.70f / count)) + sin(t * 0.7 + i).toFloat() * (w * 0.06f)
+            val cx = w * (0.15f + i * (0.70f / count)) + sin(t * 0.55 + i).toFloat() * (w * 0.06f)
             val col = if (i % 2 == 0) c1 else c2
-            val a = (alpha * 0.16f).toInt()
+            val a = (alpha * 0.15f).toInt()
             paint.shader = LinearGradient(
                 cx - pillarW, 0f, cx + pillarW, 0f,
                 intArrayOf(Color.TRANSPARENT, (col and 0x00FFFFFF) or (a shl 24), Color.TRANSPARENT),
@@ -409,86 +352,79 @@ class ProceduralAnimator {
         }
     }
 
-    // Archetype 10: Orbiting Twin Moons
     private fun drawTwinMoons(canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, alpha: Int) {
         val cx = w * 0.5f
         val cy = h * 0.50f
         val rx = w * 0.34f
         val ry = h * 0.18f
         for (m in 0..1) {
-            val ang = t * 0.75 + m * PI
+            val ang = t * 0.65 + m * PI
             val mx = cx + (cos(ang) * rx).toFloat()
             val my = cy + (sin(ang) * ry).toFloat()
             val r = w * 0.14f
             val col = if (m == 0) c1 else c2
             paint.shader = RadialGradient(
                 mx, my, r,
-                intArrayOf((col and 0x00FFFFFF) or (((alpha * 0.28f).toInt()) shl 24), Color.TRANSPARENT),
+                intArrayOf((col and 0x00FFFFFF) or (((alpha * 0.24f).toInt()) shl 24), Color.TRANSPARENT),
                 null, Shader.TileMode.CLAMP
             )
             canvas.drawCircle(mx, my, r, paint)
         }
     }
 
-    // Archetype 11: Auto Sonar Ripples
     private fun drawSonarRipples(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
         strokePaint.shader = null
         val count = (3 * density).toInt().coerceIn(2, 4)
         for (i in 0 until count) {
-            val p = (((t * 0.32 + i.toDouble() / count) % 1.0) + 1.0) % 1.0
+            val p = (((t * 0.28 + i.toDouble() / count) % 1.0) + 1.0) % 1.0
             val pf = p.toFloat()
             val cx = w * (0.30f + ((i * 0.37f) % 0.40f))
             val cy = h * (0.38f + ((i * 0.29f) % 0.24f))
             strokePaint.color = if (i % 2 == 0) c1 else c2
-            strokePaint.strokeWidth = 3f
-            strokePaint.alpha = (alpha * 0.28f * (1f - pf)).toInt().coerceIn(0, 255)
+            strokePaint.strokeWidth = 2.2f
+            strokePaint.alpha = (alpha * 0.22f * (1f - pf)).toInt().coerceIn(0, 255)
             canvas.drawCircle(cx, cy, w * (0.04f + pf * 0.22f), strokePaint)
         }
     }
 
-    // 5 Subtle Secondary Accent Layers
     private fun drawSecondaryLayer(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, alpha: Int
     ) {
         when (dna.secondary) {
             0 -> return
             1 -> {
-                // Micro-sparkle dust
                 paint.shader = null
                 paint.color = Color.WHITE
                 for (i in 0 until 7) {
-                    val tw = ((sin(t * 2.5 + i * 1.4) + 1.0) * 0.5).toFloat()
-                    paint.alpha = (alpha * 0.22f * tw).toInt()
-                    canvas.drawCircle(w * ((i * 0.31f) % 0.85f + 0.08f), h * (0.28f + (i * 0.06f)), 3f, paint)
+                    val tw = ((sin(t * 2.2 + i * 1.4) + 1.0) * 0.5).toFloat()
+                    paint.alpha = (alpha * 0.18f * tw).toInt()
+                    canvas.drawCircle(w * ((i * 0.31f) % 0.85f + 0.08f), h * (0.28f + (i * 0.06f)), 2.5f, paint)
                 }
             }
             2 -> {
-                // Subtle edge neon breath
-                val p = ((sin(t * 1.3) + 1.0) * 0.5).toFloat()
+                val p = ((sin(t * 1.1) + 1.0) * 0.5).toFloat()
                 strokePaint.shader = null
                 strokePaint.color = c1
-                strokePaint.strokeWidth = 4f
-                strokePaint.alpha = (alpha * 0.16f * p).toInt()
+                strokePaint.strokeWidth = 3f
+                strokePaint.alpha = (alpha * 0.14f * p).toInt()
                 canvas.drawLine(2f, h * 0.22f, 2f, h * 0.72f, strokePaint)
                 canvas.drawLine(w - 2f, h * 0.22f, w - 2f, h * 0.72f, strokePaint)
             }
             3 -> {
-                // Soft center halo ring
-                val p = ((sin(t * 1.1) + 1.0) * 0.5).toFloat()
+                val p = ((sin(t * 1.0) + 1.0) * 0.5).toFloat()
                 strokePaint.shader = null
                 strokePaint.color = c2
-                strokePaint.strokeWidth = 2.5f
-                strokePaint.alpha = (alpha * 0.14f * p).toInt()
+                strokePaint.strokeWidth = 2f
+                strokePaint.alpha = (alpha * 0.12f * p).toInt()
                 canvas.drawCircle(w * 0.5f, h * 0.52f, w * (0.26f + p * 0.04f), strokePaint)
             }
             4 -> {
-                // Bottom horizon mist glow
                 val r = w * 0.55f
                 paint.shader = RadialGradient(
                     w * 0.5f, h * 0.74f, r,
-                    intArrayOf((c1 and 0x00FFFFFF) or (((alpha * 0.16f).toInt()) shl 24), Color.TRANSPARENT),
+                    intArrayOf((c1 and 0x00FFFFFF) or (((alpha * 0.15f).toInt()) shl 24), Color.TRANSPARENT),
                     null, Shader.TileMode.CLAMP
                 )
                 canvas.drawCircle(w * 0.5f, h * 0.74f, r, paint)
