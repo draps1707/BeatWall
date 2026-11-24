@@ -14,35 +14,35 @@
         android:padding="24dp">
 
         <ImageView
-            android:layout_width="84dp"
-            android:layout_height="84dp"
-            android:layout_marginTop="20dp"
+            android:layout_width="92dp"
+            android:layout_height="92dp"
+            android:layout_marginTop="36dp"
             android:contentDescription="@string/app_name"
             android:src="@mipmap/ic_launcher_round" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
+            android:layout_marginTop="16dp"
             android:fontFamily="sans-serif-medium"
             android:text="BeatWall"
             android:textColor="#FFFFFF"
-            android:textSize="26sp" />
+            android:textSize="28sp" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:layout_marginBottom="28dp"
-            android:text="120 Hz Live Lyrics • Zero Clutter"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="36dp"
+            android:text="120 Hz Live Album Art &amp; Lyrics"
             android:textColor="#94A3B8"
             android:textSize="13sp" />
 
-        <!-- 1. Idle Home Wallpaper -->
+        <!-- 1. Notification Access -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
+            android:layout_marginBottom="14dp"
             app:cardBackgroundColor="#11131C"
             app:cardCornerRadius="16dp"
             app:strokeColor="#1E293B"
@@ -53,7 +53,7 @@
                 android:layout_height="wrap_content"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
-                android:padding="16dp">
+                android:padding="18dp">
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -64,103 +64,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="1. Idle Home Wallpaper"
-                        android:textColor="#F8FAFC"
-                        android:textSize="15sp" />
-
-                    <TextView
-                        android:id="@+id/statusHome"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
-                        android:text="Pick image"
-                        android:textSize="12sp" />
-                </LinearLayout>
-
-                <Button
-                    android:id="@+id/btnPickHome"
-                    style="@style/Widget.Material3.Button.TonalButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Choose" />
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- 2. Idle Lock Wallpaper -->
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
-            app:cardBackgroundColor="#11131C"
-            app:cardCornerRadius="16dp"
-            app:strokeColor="#1E293B"
-            app:strokeWidth="1dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:padding="16dp">
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="2. Idle Lock Wallpaper"
-                        android:textColor="#F8FAFC"
-                        android:textSize="15sp" />
-
-                    <TextView
-                        android:id="@+id/statusLock"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
-                        android:text="Pick image"
-                        android:textSize="12sp" />
-                </LinearLayout>
-
-                <Button
-                    android:id="@+id/btnPickLock"
-                    style="@style/Widget.Material3.Button.TonalButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Choose" />
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- 3. Notification Access -->
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
-            app:cardBackgroundColor="#11131C"
-            app:cardCornerRadius="16dp"
-            app:strokeColor="#1E293B"
-            app:strokeWidth="1dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:padding="16dp">
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="3. Media Session Access"
+                        android:text="1. Media Session Access"
                         android:textColor="#F8FAFC"
                         android:textSize="15sp" />
 
@@ -182,11 +86,11 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- 4. Unrestricted Battery -->
+        <!-- 2. Unrestricted Battery -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="24dp"
+            android:layout_marginBottom="28dp"
             app:cardBackgroundColor="#11131C"
             app:cardCornerRadius="16dp"
             app:strokeColor="#1E293B"
@@ -197,7 +101,7 @@
                 android:layout_height="wrap_content"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
-                android:padding="16dp">
+                android:padding="18dp">
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -208,7 +112,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="4. Unrestricted Battery"
+                        android:text="2. Unrestricted Battery"
                         android:textColor="#F8FAFC"
                         android:textSize="15sp" />
 

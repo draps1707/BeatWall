@@ -24,10 +24,6 @@ data class ProcessedArt(
     val lyricAccentColor: Int
 )
 
-/**
- * Generates 1/4-resolution GPU-blurred backdrops + clamped 2-color Palette glows
- * using a 2-slot reusable Bitmap pool to prevent GC stutters at 120 Hz.
- */
 class ArtEffectProcessor {
     private val blurWidth = 360
     private val blurHeight = 780
@@ -38,29 +34,27 @@ class ArtEffectProcessor {
     private var poolIdx = 0
 
     fun process(rawCover: Bitmap): ProcessedArt {
-        val palette = Palette.from(rawCover).maximumColorCount(12).generate()
+        val palette = Palette.from(rawCover).maximumColorCount(16).generate()
 
-        val rawPrimary = palette.getDarkVibrantColor(
-            palette.getVibrantColor(palette.getDominantColor(0xFF1A1625.toInt()))
+        val rawPrimary = palette.getVibrantColor(
+            palette.getDarkVibrantColor(palette.getDominantColor(0xFF1E293B.toInt()))
         )
-        val rawSecondary = palette.getDarkMutedColor(
-            palette.getMutedColor(0xFF0E1726.toInt())
+        val rawSecondary = palette.getDarkVibrantColor(
+            palette.getMutedColor(palette.getDarkMutedColor(0xFF0F172A.toInt()))
         )
         val rawAccent = palette.getLightVibrantColor(
             palette.getVibrantColor(0xFF7DD3FC.toInt())
         )
 
-        val primaryGlow = clampLuminance(rawPrimary, maxV = 0.45f)
-        val secondaryGlow = clampLuminance(rawSecondary, maxV = 0.38f)
+        val primaryGlow = clampLuminance(rawPrimary, maxV = 0.62f)
+        val secondaryGlow = clampLuminance(rawSecondary, maxV = 0.52f)
         val accentGlow = ensureVibrantAccent(rawAccent)
 
         val targetSlot = pool[poolIdx]
         poolIdx = (poolIdx + 1) % pool.size
 
         renderBlurredBackdrop(rawCover, targetSlot, primaryGlow, secondaryGlow)
-
-        // Keep a crisp, bounded cover art bitmap (max 720px) for Lock Screen Apple Music card
-        val crispCover = scaleSquareCover(rawCover, 640)
+        val crispCover = scaleSquareCover(rawCover, 680)
 
         return ProcessedArt(
             coverArt = crispCover,
@@ -77,37 +71,36 @@ class ArtEffectProcessor {
         primaryGlow: Int,
         secondaryGlow: Int
     ) {
-        val blurred = gpuBlurToBitmap(src, blurWidth, blurHeight, radius = 42f)
+        val blurred = gpuBlurToBitmap(src, blurWidth, blurHeight, radius = 38f)
         val canvas = Canvas(dest)
-        canvas.drawColor(0xFF050508.toInt())
+        canvas.drawColor(0xFF07080D.toInt())
 
         if (blurred != null) {
-            val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply { alpha = 155 }
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply { alpha = 195 }
             canvas.drawBitmap(blurred, null, Rect(0, 0, blurWidth, blurHeight), paint)
             blurred.recycle()
         }
 
-        // Layer clamped 2-color Apple-Music-style ambient radial glows
+        // Lush 2-color Apple-Music-style ambient radial glows
         val glowPaint1 = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = RadialGradient(
-                blurWidth * 0.25f, blurHeight * 0.30f, blurWidth * 0.95f,
-                intArrayOf(withAlpha(primaryGlow, 170), Color.TRANSPARENT),
+                blurWidth * 0.25f, blurHeight * 0.30f, blurWidth * 1.05f,
+                intArrayOf(withAlpha(primaryGlow, 200), Color.TRANSPARENT),
                 null, Shader.TileMode.CLAMP
             )
         }
         val glowPaint2 = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = RadialGradient(
-                blurWidth * 0.78f, blurHeight * 0.68f, blurWidth * 0.95f,
-                intArrayOf(withAlpha(secondaryGlow, 165), Color.TRANSPARENT),
+                blurWidth * 0.78f, blurHeight * 0.68f, blurWidth * 1.05f,
+                intArrayOf(withAlpha(secondaryGlow, 195), Color.TRANSPARENT),
                 null, Shader.TileMode.CLAMP
             )
         }
         canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), glowPaint1)
         canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), glowPaint2)
 
-        // Deep OLED vignette for crisp icon/clock legibility
-        val scrimPaint = Paint().apply { color = 0x55000000 }
-        canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), scrimPaint)
+        // Balanced scrim so bright covers stay readable without crushing colors
+        canvas.drawColor(0x36000000)
     }
 
     private fun gpuBlurToBitmap(src: Bitmap, w: Int, h: Int, radius: Float): Bitmap? {
@@ -140,9 +133,7 @@ class ArtEffectProcessor {
 
             val image = imageReader.acquireNextImage()
             val hwBuffer = image?.hardwareBuffer
-            val hwBmp = if (hwBuffer != null) {
-                Bitmap.wrapHardwareBuffer(hwBuffer, null)
-            } else null
+            val hwBmp = if (hwBuffer != null) Bitmap.wrapHardwareBuffer(hwBuffer, null) else null
             val swBmp = hwBmp?.copy(Bitmap.Config.ARGB_8888, false)
             hwBmp?.recycle()
             hwBuffer?.close()
@@ -151,7 +142,6 @@ class ArtEffectProcessor {
             imageReader.close()
             swBmp
         } catch (_: Exception) {
-            // Safe software downscale fallback
             Bitmap.createScaledBitmap(src, w, h, true)
         }
     }
@@ -170,15 +160,15 @@ class ArtEffectProcessor {
         val hsv = FloatArray(3)
         Color.colorToHSV(color, hsv)
         if (hsv[2] > maxV) hsv[2] = maxV
-        if (hsv[1] < 0.25f) hsv[1] = 0.25f
+        if (hsv[1] < 0.35f) hsv[1] = 0.45f
         return Color.HSVToColor(hsv)
     }
 
     private fun ensureVibrantAccent(color: Int): Int {
         val hsv = FloatArray(3)
         Color.colorToHSV(color, hsv)
-        if (hsv[2] < 0.72f) hsv[2] = 0.85f
-        if (hsv[1] < 0.35f) hsv[1] = 0.55f
+        if (hsv[2] < 0.78f) hsv[2] = 0.90f
+        if (hsv[1] < 0.40f) hsv[1] = 0.60f
         return Color.HSVToColor(hsv)
     }
 

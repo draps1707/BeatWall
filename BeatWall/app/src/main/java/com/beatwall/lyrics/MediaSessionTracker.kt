@@ -2,10 +2,12 @@ package com.beatwall.lyrics
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -14,6 +16,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
 
 data class ActiveTrackState(
     val trackKey: String,
@@ -23,6 +28,7 @@ data class ActiveTrackState(
     val processedArt: ProcessedArt?,
     val lyrics: List<LyricLine>,
     val isPlaying: Boolean,
+    val showLyrics: Boolean,
     val basePositionMs: Long,
     val lastUpdateElapsedMs: Long,
     val playbackSpeed: Float
@@ -54,18 +60,42 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         appContext.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
     private val lrcClient = LrcLibClient(appContext)
     private val artProcessor = ArtEffectProcessor()
+    private val lastCoverStore = LastCoverStore(appContext)
 
     private val listeners = LinkedHashSet<Listener>()
     private var activeController: MediaController? = null
-    private var fetchJob: Job? = null
+    private var lyricsJob: Job? = null
+    private var artJob: Job? = null
     private var currentTrackKey: String? = null
+    private var currentArtSignature: String? = null
     private var currentState: ActiveTrackState? = null
     private var sessionsRegistered = false
 
+    init {
+        // Restore last played cover + colors immediately on startup/reboot
+        lastCoverStore.load()?.let { saved ->
+            val processed = artProcessor.process(saved.cover)
+            saved.cover.recycle()
+            currentState = ActiveTrackState(
+                trackKey = "restored",
+                packageName = "",
+                title = saved.title,
+                artist = saved.artist,
+                processedArt = processed,
+                lyrics = emptyList(),
+                isPlaying = false,
+                showLyrics = false,
+                basePositionMs = 0L,
+                lastUpdateElapsedMs = 0L,
+                playbackSpeed = 1.0f
+            )
+        }
+    }
+
     private val pauseTimeoutRunnable = Runnable {
-        currentTrackKey = null
-        currentState = null
-        notifyListeners(null)
+        // Keep last played HD cover & ambient colors, just fade out lyrics
+        currentState = currentState?.copy(isPlaying = false, showLyrics = false)
+        notifyListeners(currentState)
     }
 
     private val sessionsChangedListener =
@@ -141,9 +171,8 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
 
         if (chosen == null) {
             mainHandler.removeCallbacks(pauseTimeoutRunnable)
-            currentTrackKey = null
-            currentState = null
-            notifyListeners(null)
+            currentState = currentState?.copy(isPlaying = false, showLyrics = false)
+            notifyListeners(currentState)
             return
         }
 
@@ -164,20 +193,21 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
             mainHandler.postDelayed(pauseTimeoutRunnable, pauseGraceMs)
         } else if (stateCode == PlaybackState.STATE_STOPPED || stateCode == PlaybackState.STATE_NONE) {
             mainHandler.removeCallbacks(pauseTimeoutRunnable)
-            currentTrackKey = null
-            currentState = null
-            notifyListeners(null)
+            currentState = currentState?.copy(isPlaying = false, showLyrics = false)
+            notifyListeners(currentState)
             return
         }
 
         val existing = currentState
-        if (existing == null) {
+        if (existing == null || existing.trackKey == "restored") {
             handleControllerUpdate(controller)
             return
         }
 
         val updated = existing.copy(
             isPlaying = stateCode == PlaybackState.STATE_PLAYING,
+            showLyrics = existing.lyrics.isNotEmpty() &&
+                (stateCode == PlaybackState.STATE_PLAYING || stateCode == PlaybackState.STATE_BUFFERING || stateCode == PlaybackState.STATE_PAUSED),
             basePositionMs = (pb?.position ?: existing.basePositionMs).coerceAtLeast(0L),
             lastUpdateElapsedMs = pb?.lastPositionUpdateTime?.takeIf { it > 0L }
                 ?: SystemClock.elapsedRealtime(),
@@ -195,9 +225,8 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
 
         if (stateCode == PlaybackState.STATE_STOPPED || stateCode == PlaybackState.STATE_NONE) {
             mainHandler.removeCallbacks(pauseTimeoutRunnable)
-            currentTrackKey = null
-            currentState = null
-            notifyListeners(null)
+            currentState = currentState?.copy(isPlaying = false, showLyrics = false)
+            notifyListeners(currentState)
             return
         }
 
@@ -219,17 +248,26 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         val pkg = controller.packageName
         val trackKey = "$pkg|$rawArtist|$rawTitle"
 
-        if (trackKey == currentTrackKey && currentState != null) {
+        val rawCover: Bitmap? = meta.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+            ?: meta.getBitmap(MediaMetadata.METADATA_KEY_ART)
+            ?: meta.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
+        val artUri: String? = meta.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+            ?: meta.getString(MediaMetadata.METADATA_KEY_ART_URI)
+            ?: meta.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)
+
+        val artSig = "$trackKey|${rawCover != null}|${artUri ?: ""}"
+
+        // Same track, AND artwork already arrived earlier -> just update playback state
+        if (trackKey == currentTrackKey && currentState != null &&
+            (currentState?.processedArt != null || artSig == currentArtSignature)
+        ) {
             handlePlaybackStateOnly(pb)
             return
         }
 
+        val isNewTrack = trackKey != currentTrackKey
         currentTrackKey = trackKey
-        fetchJob?.cancel()
-
-        val rawCover: Bitmap? = meta.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
-            ?: meta.getBitmap(MediaMetadata.METADATA_KEY_ART)
-            ?: meta.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
+        currentArtSignature = artSig
 
         val clean = TitleSanitizer.clean(rawTitle, rawArtist)
         val basePos = (pb?.position ?: 0L).coerceAtLeast(0L)
@@ -237,36 +275,108 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
             ?: SystemClock.elapsedRealtime()
         val speed = pb?.playbackSpeed?.takeIf { it > 0f } ?: 1.0f
 
-        fetchJob = scope.launch {
-            val lyrics = lrcClient.fetchSyncedLyrics(rawTitle, rawArtist, durationMs)
-            if (trackKey != currentTrackKey) return@launch
-
-            // YouTube Music-Only Rule: ignore lectures/non-music videos with no synced lyrics
-            if (pkg == youtubePkg && lyrics.isEmpty()) {
-                currentState = null
-                notifyListeners(null)
-                return@launch
+        if (isNewTrack) {
+            // Emit track metadata immediately while art & lyrics resolve in parallel
+            if (pkg != youtubePkg) {
+                currentState = ActiveTrackState(
+                    trackKey = trackKey,
+                    packageName = pkg,
+                    title = clean.title,
+                    artist = clean.artist,
+                    processedArt = currentState?.processedArt,
+                    lyrics = emptyList(),
+                    isPlaying = isPlaying,
+                    showLyrics = false,
+                    basePositionMs = basePos,
+                    lastUpdateElapsedMs = updateElapsed,
+                    playbackSpeed = speed
+                )
+                notifyListeners(currentState)
             }
 
-            val processed = kotlinx.coroutines.withContext(Dispatchers.Default) {
-                rawCover?.let { artProcessor.process(it) }
-            }
-            if (trackKey != currentTrackKey) return@launch
+            lyricsJob?.cancel()
+            lyricsJob = scope.launch {
+                val lyrics = lrcClient.fetchSyncedLyrics(rawTitle, rawArtist, durationMs)
+                if (trackKey != currentTrackKey) return@launch
 
-            val nextState = ActiveTrackState(
-                trackKey = trackKey,
-                packageName = pkg,
-                title = clean.title,
-                artist = clean.artist,
-                processedArt = processed,
-                lyrics = lyrics,
-                isPlaying = isPlaying,
-                basePositionMs = basePos,
-                lastUpdateElapsedMs = updateElapsed,
-                playbackSpeed = speed
-            )
-            currentState = nextState
-            notifyListeners(nextState)
+                // YouTube Music-Only Rule: ignore lectures/non-music videos with no synced lyrics
+                if (pkg == youtubePkg && lyrics.isEmpty()) {
+                    return@launch
+                }
+
+                val latest = currentState?.takeIf { it.trackKey == trackKey } ?: ActiveTrackState(
+                    trackKey = trackKey,
+                    packageName = pkg,
+                    title = clean.title,
+                    artist = clean.artist,
+                    processedArt = currentState?.processedArt,
+                    lyrics = emptyList(),
+                    isPlaying = isPlaying,
+                    showLyrics = false,
+                    basePositionMs = basePos,
+                    lastUpdateElapsedMs = updateElapsed,
+                    playbackSpeed = speed
+                )
+                currentState = latest.copy(
+                    lyrics = lyrics,
+                    showLyrics = lyrics.isNotEmpty()
+                )
+                notifyListeners(currentState)
+            }
+        }
+
+        // Instant Art-First Pipeline (Bitmap OR ART_URI)
+        if (rawCover != null || !artUri.isNullOrBlank()) {
+            artJob?.cancel()
+            artJob = scope.launch {
+                val bmp = withContext(Dispatchers.IO) {
+                    rawCover ?: loadBitmapFromUri(artUri)
+                } ?: return@launch
+                if (trackKey != currentTrackKey) return@launch
+
+                val processed = withContext(Dispatchers.Default) {
+                    lastCoverStore.save(clean.title, clean.artist, bmp)
+                    artProcessor.process(bmp)
+                }
+                if (trackKey != currentTrackKey) return@launch
+
+                // If YouTube non-music video hasn't earned takeover, skip updating
+                if (pkg == youtubePkg && (currentState?.trackKey != trackKey)) return@launch
+
+                currentState = (currentState ?: ActiveTrackState(
+                    trackKey = trackKey,
+                    packageName = pkg,
+                    title = clean.title,
+                    artist = clean.artist,
+                    processedArt = null,
+                    lyrics = emptyList(),
+                    isPlaying = isPlaying,
+                    showLyrics = false,
+                    basePositionMs = basePos,
+                    lastUpdateElapsedMs = updateElapsed,
+                    playbackSpeed = speed
+                )).copy(processedArt = processed)
+                notifyListeners(currentState)
+            }
+        }
+    }
+
+    private fun loadBitmapFromUri(uriStr: String?): Bitmap? {
+        if (uriStr.isNullOrBlank()) return null
+        return try {
+            if (uriStr.startsWith("http://") || uriStr.startsWith("https://")) {
+                val conn = (URL(uriStr).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 4000
+                    readTimeout = 4000
+                }
+                conn.inputStream.use { BitmapFactory.decodeStream(it) }
+            } else {
+                appContext.contentResolver.openInputStream(Uri.parse(uriStr))?.use {
+                    BitmapFactory.decodeStream(it)
+                }
+            }
+        } catch (_: Exception) {
+            null
         }
     }
 

@@ -6,6 +6,7 @@ object TitleSanitizer {
         RegexOption.IGNORE_CASE
     )
     private val PIPE_SUFFIX = Regex("""\s*[\|\u2014]\s*.*$""")
+    private val SMART_SHUFFLE_SUFFIX = Regex("""\s*[•·]\s*From\s+.*$""", RegexOption.IGNORE_CASE)
     private val FEAT_SUFFIX = Regex("""\s+(feat\.?|ft\.?)\s+.*$""", RegexOption.IGNORE_CASE)
     private val TOPIC_VEVO = Regex("""(\s*-\s*Topic$|VEVO$)""", RegexOption.IGNORE_CASE)
     private val MULTI_SPACE = Regex("""\s{2,}""")
@@ -21,12 +22,12 @@ object TitleSanitizer {
             .trim()
 
         var artist = rawArtist
+            .replace(SMART_SHUFFLE_SUFFIX, "")
             .replace(TOPIC_VEVO, "")
             .replace(FEAT_SUFFIX, "")
             .replace(MULTI_SPACE, " ")
             .trim()
 
-        // Handle YouTube titles formatted as "Artist - Song Title" when artist is a channel name
         if (title.contains(" - ")) {
             val parts = title.split(" - ", limit = 2)
             val left = parts[0].trim()
