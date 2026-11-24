@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#07080D"
+    android:background="#05060A"
     android:fillViewport="true">
 
     <LinearLayout
@@ -14,37 +14,30 @@
         android:padding="24dp">
 
         <ImageView
-            android:layout_width="92dp"
-            android:layout_height="92dp"
-            android:layout_marginTop="36dp"
+            android:layout_width="88dp"
+            android:layout_height="88dp"
+            android:layout_marginTop="48dp"
             android:contentDescription="@string/app_name"
             android:src="@mipmap/ic_launcher_round" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="14dp"
+            android:layout_marginBottom="40dp"
             android:fontFamily="sans-serif-medium"
             android:text="BeatWall"
             android:textColor="#FFFFFF"
             android:textSize="28sp" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:layout_marginBottom="36dp"
-            android:text="120 Hz Live Album Art &amp; Lyrics"
-            android:textColor="#94A3B8"
-            android:textSize="13sp" />
-
-        <!-- 1. Notification Access -->
+        <!-- Auto-hides once granted -->
         <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardNotif"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="14dp"
             app:cardBackgroundColor="#11131C"
-            app:cardCornerRadius="16dp"
+            app:cardCornerRadius="18dp"
             app:strokeColor="#1E293B"
             app:strokeWidth="1dp">
 
@@ -55,27 +48,13 @@
                 android:orientation="horizontal"
                 android:padding="18dp">
 
-                <LinearLayout
+                <TextView
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="1. Media Session Access"
-                        android:textColor="#F8FAFC"
-                        android:textSize="15sp" />
-
-                    <TextView
-                        android:id="@+id/statusNotif"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
-                        android:text="Required"
-                        android:textSize="12sp" />
-                </LinearLayout>
+                    android:text="Media Session Access"
+                    android:textColor="#F8FAFC"
+                    android:textSize="15sp" />
 
                 <Button
                     android:id="@+id/btnNotifAccess"
@@ -86,13 +65,14 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- 2. Unrestricted Battery -->
+        <!-- Auto-hides once granted -->
         <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardBattery"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="28dp"
+            android:layout_marginBottom="14dp"
             app:cardBackgroundColor="#11131C"
-            app:cardCornerRadius="16dp"
+            app:cardCornerRadius="18dp"
             app:strokeColor="#1E293B"
             app:strokeWidth="1dp">
 
@@ -103,27 +83,13 @@
                 android:orientation="horizontal"
                 android:padding="18dp">
 
-                <LinearLayout
+                <TextView
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="2. Unrestricted Battery"
-                        android:textColor="#F8FAFC"
-                        android:textSize="15sp" />
-
-                    <TextView
-                        android:id="@+id/statusBattery"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
-                        android:text="Recommended"
-                        android:textSize="12sp" />
-                </LinearLayout>
+                    android:text="Unrestricted Battery"
+                    android:textColor="#F8FAFC"
+                    android:textSize="15sp" />
 
                 <Button
                     android:id="@+id/btnBattery"
@@ -134,12 +100,79 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
+        <!-- Minimalist Current Vibe Card (shown when permissions are ready) -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardNowPlaying"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="28dp"
+            android:visibility="gone"
+            app:cardBackgroundColor="#11131C"
+            app:cardCornerRadius="20dp"
+            app:strokeColor="#1E293B"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="16dp">
+
+                <com.google.android.material.imageview.ShapeableImageView
+                    android:id="@+id/imgCurrentCover"
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
+                    android:scaleType="centerCrop"
+                    android:src="@mipmap/ic_launcher_round"
+                    app:shapeAppearanceOverlay="@style/ShapeAppearance.Material3.Corner.Medium" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="14dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/txtActiveDot"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="● Connected"
+                        android:textColor="#34D399"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/txtCurrentTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="Ready"
+                        android:textColor="#FFFFFF"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/txtCurrentArtist"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="Play Spotify, YT Music, or YouTube"
+                        android:textColor="#94A3B8"
+                        android:textSize="13sp" />
+                </LinearLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
         <Button
             android:id="@+id/btnSetWallpaper"
             android:layout_width="match_parent"
-            android:layout_height="56dp"
+            android:layout_height="54dp"
             android:backgroundTint="#38BDF8"
-            android:text="Set BeatWall as Live Wallpaper"
+            android:text="Set Live Wallpaper"
             android:textColor="#04060A"
             android:textSize="15sp"
             android:textStyle="bold" />

@@ -23,15 +23,15 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build Debug APK
+      - name: Build Signed Release APK
         run: |
           if [ -f BeatWall/settings.gradle.kts ]; then
             cd BeatWall
           fi
-          gradle assembleDebug --no-daemon
+          gradle assembleRelease --no-daemon
 
-      - name: Upload BeatWall APK
+      - name: Upload BeatWall Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: BeatWall-debug-apk
-          path: "**/app/build/outputs/apk/debug/app-debug.apk"
+          name: BeatWall-release-apk
+          path: "**/app/build/outputs/apk/release/app-release.apk"

@@ -11,12 +11,22 @@ android {
         applicationId = "com.beatwall.lyrics"
         minSdk = 31
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 5
+        versionName = "1.4.0"
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("beatwall-release.jks")
+            storePassword = "beatwall2026"
+            keyAlias = "beatwall"
+            keyPassword = "beatwall2026"
+        }
     }
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

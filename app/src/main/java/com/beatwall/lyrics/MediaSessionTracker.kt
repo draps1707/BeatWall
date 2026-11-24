@@ -17,8 +17,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 data class ActiveTrackState(
     val trackKey: String,
@@ -67,6 +71,8 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
     private val lrcClient = LrcLibClient(appContext)
     private val artProcessor = ArtEffectProcessor()
     private val lastCoverStore = LastCoverStore(appContext)
+    private val artCacheDir = File(appContext.cacheDir, "art_cache").apply { mkdirs() }
+    private val maxArtCacheFiles = 100
 
     private val listeners = LinkedHashSet<Listener>()
     private var activeController: MediaController? = null
@@ -330,7 +336,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
             artJob?.cancel()
             artJob = scope.launch {
                 val bmp = withContext(Dispatchers.IO) {
-                    rawCover ?: loadBitmapFromUri(artUri)
+                    rawCover ?: loadBitmapFromUriCached(artUri)
                 } ?: return@launch
                 if (trackKey != currentTrackKey) return@launch
 
@@ -360,23 +366,62 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         }
     }
 
-    private fun loadBitmapFromUri(uriStr: String?): Bitmap? {
+    private fun loadBitmapFromUriCached(uriStr: String?): Bitmap? {
         if (uriStr.isNullOrBlank()) return null
+        val key = sha256(uriStr)
+        val cached = File(artCacheDir, "$key.jpg")
+        if (cached.exists()) {
+            cached.setLastModified(System.currentTimeMillis())
+            BitmapFactory.decodeFile(cached.absolutePath)?.let { return it }
+        }
+
         return try {
-            if (uriStr.startsWith("http://") || uriStr.startsWith("https://")) {
+            val rawBytes = if (uriStr.startsWith("http://") || uriStr.startsWith("https://")) {
                 val conn = (URL(uriStr).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 4000
-                    readTimeout = 4000
+                    connectTimeout = 3000
+                    readTimeout = 3000
                 }
-                conn.inputStream.use { BitmapFactory.decodeStream(it) }
+                conn.inputStream.use { it.readBytes() }
             } else {
-                appContext.contentResolver.openInputStream(Uri.parse(uriStr))?.use {
-                    BitmapFactory.decodeStream(it)
-                }
+                appContext.contentResolver.openInputStream(Uri.parse(uriStr))?.use { it.readBytes() }
+            } ?: return null
+
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, bounds)
+            var inSample = 1
+            while (bounds.outWidth / (inSample * 2) >= 720 &&
+                bounds.outHeight / (inSample * 2) >= 720
+            ) {
+                inSample *= 2
             }
+
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = inSample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            val bmp = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, opts) ?: return null
+
+            trimArtCacheIfNeeded()
+            FileOutputStream(cached).use { out ->
+                bmp.compress(Bitmap.CompressFormat.JPEG, 92, out)
+            }
+            bmp
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun trimArtCacheIfNeeded() {
+        val files = artCacheDir.listFiles() ?: return
+        if (files.size <= maxArtCacheFiles) return
+        files.sortedBy { it.lastModified() }
+            .take(files.size - maxArtCacheFiles)
+            .forEach { it.delete() }
+    }
+
+    private fun sha256(input: String): String {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 
     private fun notifyListeners(state: ActiveTrackState?) {
