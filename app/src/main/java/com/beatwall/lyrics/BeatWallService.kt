@@ -567,6 +567,7 @@ class BeatWallService : WallpaperService() {
                 } else {
                     drawState(canvas, activeState, isLock, 1f, frameTimeNanos)
                 }
+            } catch (_: Throwable) {
             } finally {
                 try {
                     holder.unlockCanvasAndPost(canvas)
@@ -638,7 +639,7 @@ class BeatWallService : WallpaperService() {
             val centerY = if (isLock) height * 0.572f else height * 0.49f
             val centerX = width * 0.06f
 
-            if (lyrAlpha > 3 && centeredLayouts.isNotEmpty() && lyricYCenters.isNotEmpty()) {
+            if (state === activeState && lyrAlpha > 3 && centeredLayouts.isNotEmpty() && lyricYCenters.isNotEmpty()) {
                 canvas.save()
                 canvas.clipRect(clipRect)
                 drawWindowedKaraokeLyrics(
@@ -947,9 +948,11 @@ class BeatWallService : WallpaperService() {
             masterAlpha: Int,
             frameTimeNanos: Long
         ) {
-            val activeIdx = currentLineIndex.coerceAtLeast(0)
+            val maxIdx = minOf(layouts.lastIndex, state.lyrics.lastIndex, yCenters.lastIndex)
+            if (maxIdx < 0) return
+            val activeIdx = currentLineIndex.coerceIn(0, maxIdx)
             val start = (activeIdx - 3).coerceAtLeast(0)
-            val end = (activeIdx + 3).coerceAtMost(layouts.lastIndex)
+            val end = (activeIdx + 3).coerceAtMost(maxIdx)
             val timeSec = frameTimeNanos / 1_000_000_000.0
             val mistZone = (clipBottom - clipTop) * 0.10f
             val posMs = state.currentPositionMs()
