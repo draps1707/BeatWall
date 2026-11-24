@@ -70,7 +70,7 @@ class BeatWallService : WallpaperService() {
         private var prevState: ActiveTrackState? = null
         private var crossfadeProgress = 1f
         private var crossfadeStartMs = 0L
-        private val crossfadeDurationMs = 350L
+        private val crossfadeDurationMs = 550L
 
         private var lyricsAlpha = 0f
         private var targetLyricsAlpha = 0f
@@ -103,12 +103,11 @@ class BeatWallService : WallpaperService() {
         private val orbPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val progressTrackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            color = 0x26FFFFFF
+            color = 0x1FFFFFFF
         }
         private val progressFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
         }
-        private val animPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
         private val headerTitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -258,16 +257,23 @@ class BeatWallService : WallpaperService() {
             val prevKey = activeState?.trackKey
             val newKey = state?.trackKey
             val artChanged = activeState?.processedArt !== state?.processedArt
-            if (prevKey != newKey) {
-                prevState = activeState
-                crossfadeProgress = 0f
-                crossfadeStartMs = SystemClock.elapsedRealtime()
-                currentLineIndex = -1
-                springY = 0f
-                springVelocity = 0f
-                targetY = 0f
-                proceduralAnimator.reroll(calmOnly = state == null)
+
+            // Trigger smooth 550ms melt whenever track OR artwork changes (no flicker!)
+            if (prevKey != newKey || artChanged) {
+                if (activeState != null) {
+                    prevState = activeState
+                    crossfadeProgress = 0f
+                    crossfadeStartMs = SystemClock.elapsedRealtime()
+                }
+                if (prevKey != newKey) {
+                    currentLineIndex = -1
+                    springY = 0f
+                    springVelocity = 0f
+                    targetY = 0f
+                    proceduralAnimator.reroll(calmOnly = state == null)
+                }
             }
+
             activeState = state
             targetLyricsAlpha = if (state?.showLyrics == true && state.lyrics.isNotEmpty()) 1f else 0f
             if (prevKey == null && state == null) {
@@ -474,8 +480,10 @@ class BeatWallService : WallpaperService() {
                 canvas.drawColor(0xFF05060A.toInt())
 
                 if (crossfadeProgress < 1f && prevState != null) {
-                    drawState(canvas, prevState, isLock, 1f - crossfadeProgress, frameTimeNanos)
-                    drawState(canvas, activeState, isLock, crossfadeProgress, frameTimeNanos)
+                    // Cubic ease-in-out melt between previous and next song
+                    val eased = crossfadeProgress * crossfadeProgress * (3f - 2f * crossfadeProgress)
+                    drawState(canvas, prevState, isLock, 1f - eased, frameTimeNanos)
+                    drawState(canvas, activeState, isLock, eased, frameTimeNanos)
                 } else {
                     drawState(canvas, activeState, isLock, 1f, frameTimeNanos)
                 }
@@ -502,7 +510,6 @@ class BeatWallService : WallpaperService() {
                 val minOfDay = currentMinuteOfDay()
                 val circ = artProcessor.getCircadianTheme(minOfDay)
                 drawBreathingBackdrop(canvas, circ.backdrop, !isLowBattery, timeSec, masterAlpha)
-                drawSkyCelestialOrb(canvas, minOfDay, isLock, timeSec, circ.accent, masterAlpha)
                 if (!isLock && !isLowBattery) {
                     proceduralAnimator.draw(
                         canvas = canvas,
@@ -515,6 +522,7 @@ class BeatWallService : WallpaperService() {
                         masterAlpha = masterAlpha
                     )
                 }
+                drawSkyCelestialOrb(canvas, minOfDay, isLock, timeSec, circ.accent, masterAlpha)
                 return
             }
 
@@ -620,12 +628,10 @@ class BeatWallService : WallpaperService() {
             orbPaint.shader = null
 
             if (isDay) {
-                // Crisp glowing Sun disc
                 orbPaint.color = 0xFFFEF3C7.toInt()
                 orbPaint.alpha = (masterAlpha * 0.90f).toInt()
                 canvas.drawCircle(orbX, orbY, width * 0.017f, orbPaint)
             } else {
-                // Crisp Crescent Moon shape (pre-allocated Path difference)
                 val r = width * 0.022f
                 moonPath.reset()
                 moonPath.addCircle(orbX, orbY, r, Path.Direction.CW)
@@ -696,7 +702,7 @@ class BeatWallService : WallpaperService() {
             }
 
             val textLeft = leftMargin + thumbSize + width * 0.038f
-            val maxTextW = width * 0.52f
+            val maxTextW = width * 0.54f
             headerTitlePaint.textSize = width * 0.041f
             headerTitlePaint.alpha = headerAlpha
             headerArtistPaint.textSize = width * 0.032f
@@ -715,8 +721,9 @@ class BeatWallService : WallpaperService() {
                 headerArtistPaint
             )
 
+            // Whisper-quiet 3-dot pulse on right edge of header
             if (state.isPlaying && !isLowBattery) {
-                drawMiniHeaderBars(canvas, timeSec, width * 0.88f, headerTop + thumbSize * 0.5f, accent, headerAlpha)
+                drawWhisper3DotPulse(canvas, timeSec, width * 0.89f, headerTop + thumbSize * 0.5f, accent, headerAlpha)
             }
 
             if (state.durationMs > 0L) {
@@ -735,19 +742,19 @@ class BeatWallService : WallpaperService() {
             accent: Int,
             alpha: Int
         ) {
-            val h = 5f
-            progressTrackPaint.alpha = (alpha * 0.16f).toInt()
+            val h = 3f
+            progressTrackPaint.alpha = (alpha * 0.12f).toInt()
             pillRect.set(left, top, left + totalW, top + h)
             canvas.drawRoundRect(pillRect, h / 2f, h / 2f, progressTrackPaint)
 
             val fillW = (totalW * fraction).coerceAtLeast(h)
             progressFillPaint.color = accent
-            progressFillPaint.alpha = (alpha * 0.90f).toInt()
+            progressFillPaint.alpha = (alpha * 0.80f).toInt()
             pillRect.set(left, top, left + fillW, top + h)
             canvas.drawRoundRect(pillRect, h / 2f, h / 2f, progressFillPaint)
         }
 
-        private fun drawMiniHeaderBars(
+        private fun drawWhisper3DotPulse(
             canvas: Canvas,
             timeSec: Double,
             centerX: Float,
@@ -755,21 +762,14 @@ class BeatWallService : WallpaperService() {
             accent: Int,
             alpha: Int
         ) {
-            animPaint.color = accent
-            animPaint.alpha = (alpha * 0.88f).toInt()
-            val barW = width * 0.011f
-            val gap = barW * 0.8f
-            val totalW = 5 * barW + 4 * gap
-            val startX = centerX - totalW / 2f
-            val maxH = width * 0.055f
-
-            for (i in 0 until 5) {
-                val phase = timeSec * (4.2 + i * 0.7) + i * 1.1
-                val norm = 0.30f + 0.70f * ((sin(phase) + 1.0) * 0.5).toFloat()
-                val bh = maxH * norm
-                val x = startX + i * (barW + gap)
-                pillRect.set(x, centerY - bh / 2f, x + barW, centerY + bh / 2f)
-                canvas.drawRoundRect(pillRect, barW / 2f, barW / 2f, animPaint)
+            dotPaint.color = accent
+            val baseR = width * 0.0065f
+            val gap = width * 0.022f
+            for (d in -1..1) {
+                val phase = timeSec * 3.2 - (d + 1) * 0.8
+                val wave = 0.35f + 0.65f * ((sin(phase) + 1.0) * 0.5).toFloat()
+                dotPaint.alpha = (alpha * (0.35f + 0.50f * wave)).toInt().coerceIn(0, 255)
+                canvas.drawCircle(centerX + d * gap, centerY, baseR * (0.85f + 0.30f * wave), dotPaint)
             }
         }
 
@@ -806,7 +806,7 @@ class BeatWallService : WallpaperService() {
 
                 val isFocused = i == activeIdx
                 val focusStrength = if (isFocused) 1f else 0f
-                val alphaFactor = (if (isFocused) 1f else 0.42f) * mistFactor
+                val alphaFactor = (if (isFocused) 1f else 0.32f) * mistFactor
                 val lineAlpha = (masterAlpha * alphaFactor).toInt().coerceIn(0, 255)
                 if (lineAlpha <= 2) continue
 
@@ -843,7 +843,7 @@ class BeatWallService : WallpaperService() {
                     val softEdge = (maxLineW * 0.14f).coerceAtLeast(24f)
 
                     val brightWhite = (0xFFFFFF) or (lineAlpha shl 24)
-                    val dimWhite = (0xFFFFFF) or (((lineAlpha * 0.48f).toInt()) shl 24)
+                    val dimWhite = (0xFFFFFF) or (((lineAlpha * 0.75f).toInt()) shl 24)
 
                     layout.paint.style = Paint.Style.FILL
                     layout.paint.shader = LinearGradient(
