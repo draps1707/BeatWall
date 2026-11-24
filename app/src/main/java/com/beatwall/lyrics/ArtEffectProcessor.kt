@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.HardwareRenderer
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.RadialGradient
@@ -54,7 +55,7 @@ class ArtEffectProcessor {
         poolIdx = (poolIdx + 1) % pool.size
 
         renderBlurredBackdrop(rawCover, targetSlot, primaryGlow, secondaryGlow)
-        val crispCover = scaleSquareCover(rawCover, 680)
+        val crispCover = scaleSquareCover(rawCover, 720)
 
         return ProcessedArt(
             coverArt = crispCover,
@@ -73,34 +74,42 @@ class ArtEffectProcessor {
     ) {
         val blurred = gpuBlurToBitmap(src, blurWidth, blurHeight, radius = 38f)
         val canvas = Canvas(dest)
-        canvas.drawColor(0xFF07080D.toInt())
+        canvas.drawColor(0xFF05060A.toInt())
 
         if (blurred != null) {
-            val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply { alpha = 195 }
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply { alpha = 185 }
             canvas.drawBitmap(blurred, null, Rect(0, 0, blurWidth, blurHeight), paint)
             blurred.recycle()
         }
 
-        // Lush 2-color Apple-Music-style ambient radial glows
+        // Lush 2-color ambient radial glows
         val glowPaint1 = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = RadialGradient(
-                blurWidth * 0.25f, blurHeight * 0.30f, blurWidth * 1.05f,
-                intArrayOf(withAlpha(primaryGlow, 200), Color.TRANSPARENT),
+                blurWidth * 0.25f, blurHeight * 0.32f, blurWidth * 1.0f,
+                intArrayOf(withAlpha(primaryGlow, 210), Color.TRANSPARENT),
                 null, Shader.TileMode.CLAMP
             )
         }
         val glowPaint2 = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = RadialGradient(
-                blurWidth * 0.78f, blurHeight * 0.68f, blurWidth * 1.05f,
-                intArrayOf(withAlpha(secondaryGlow, 195), Color.TRANSPARENT),
+                blurWidth * 0.78f, blurHeight * 0.66f, blurWidth * 1.0f,
+                intArrayOf(withAlpha(secondaryGlow, 200), Color.TRANSPARENT),
                 null, Shader.TileMode.CLAMP
             )
         }
         canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), glowPaint1)
         canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), glowPaint2)
 
-        // Balanced scrim so bright covers stay readable without crushing colors
-        canvas.drawColor(0x36000000)
+        // Glossy OLED edge vignette (deep near-black at top & bottom for clock/dock legibility)
+        val vignettePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = LinearGradient(
+                0f, 0f, 0f, blurHeight.toFloat(),
+                intArrayOf(0xAA040508.toInt(), 0x24000000, 0x24000000, 0xCC040508.toInt()),
+                floatArrayOf(0f, 0.28f, 0.72f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), vignettePaint)
     }
 
     private fun gpuBlurToBitmap(src: Bitmap, w: Int, h: Int, radius: Float): Bitmap? {
@@ -167,8 +176,8 @@ class ArtEffectProcessor {
     private fun ensureVibrantAccent(color: Int): Int {
         val hsv = FloatArray(3)
         Color.colorToHSV(color, hsv)
-        if (hsv[2] < 0.78f) hsv[2] = 0.90f
-        if (hsv[1] < 0.40f) hsv[1] = 0.60f
+        if (hsv[2] < 0.80f) hsv[2] = 0.92f
+        if (hsv[1] < 0.40f) hsv[1] = 0.65f
         return Color.HSVToColor(hsv)
     }
 

@@ -25,6 +25,7 @@ data class ActiveTrackState(
     val packageName: String,
     val title: String,
     val artist: String,
+    val durationMs: Long,
     val processedArt: ProcessedArt?,
     val lyrics: List<LyricLine>,
     val isPlaying: Boolean,
@@ -37,6 +38,11 @@ data class ActiveTrackState(
         if (!isPlaying) return basePositionMs
         val delta = (nowElapsedMs - lastUpdateElapsedMs).coerceAtLeast(0L)
         return (basePositionMs + (delta * playbackSpeed).toLong()).coerceAtLeast(0L)
+    }
+
+    fun progressFraction(nowElapsedMs: Long = SystemClock.elapsedRealtime()): Float {
+        if (durationMs <= 0L) return 0f
+        return (currentPositionMs(nowElapsedMs).toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     }
 }
 
@@ -72,7 +78,6 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
     private var sessionsRegistered = false
 
     init {
-        // Restore last played cover + colors immediately on startup/reboot
         lastCoverStore.load()?.let { saved ->
             val processed = artProcessor.process(saved.cover)
             saved.cover.recycle()
@@ -81,6 +86,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
                 packageName = "",
                 title = saved.title,
                 artist = saved.artist,
+                durationMs = 0L,
                 processedArt = processed,
                 lyrics = emptyList(),
                 isPlaying = false,
@@ -93,7 +99,6 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
     }
 
     private val pauseTimeoutRunnable = Runnable {
-        // Keep last played HD cover & ambient colors, just fade out lyrics
         currentState = currentState?.copy(isPlaying = false, showLyrics = false)
         notifyListeners(currentState)
     }
@@ -244,7 +249,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         val rawArtist = meta.getString(MediaMetadata.METADATA_KEY_ARTIST)
             ?: meta.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
             ?: ""
-        val durationMs = meta.getLong(MediaMetadata.METADATA_KEY_DURATION)
+        val durationMs = meta.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)
         val pkg = controller.packageName
         val trackKey = "$pkg|$rawArtist|$rawTitle"
 
@@ -257,7 +262,6 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
 
         val artSig = "$trackKey|${rawCover != null}|${artUri ?: ""}"
 
-        // Same track, AND artwork already arrived earlier -> just update playback state
         if (trackKey == currentTrackKey && currentState != null &&
             (currentState?.processedArt != null || artSig == currentArtSignature)
         ) {
@@ -276,13 +280,13 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         val speed = pb?.playbackSpeed?.takeIf { it > 0f } ?: 1.0f
 
         if (isNewTrack) {
-            // Emit track metadata immediately while art & lyrics resolve in parallel
             if (pkg != youtubePkg) {
                 currentState = ActiveTrackState(
                     trackKey = trackKey,
                     packageName = pkg,
                     title = clean.title,
                     artist = clean.artist,
+                    durationMs = durationMs,
                     processedArt = currentState?.processedArt,
                     lyrics = emptyList(),
                     isPlaying = isPlaying,
@@ -298,17 +302,14 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
             lyricsJob = scope.launch {
                 val lyrics = lrcClient.fetchSyncedLyrics(rawTitle, rawArtist, durationMs)
                 if (trackKey != currentTrackKey) return@launch
-
-                // YouTube Music-Only Rule: ignore lectures/non-music videos with no synced lyrics
-                if (pkg == youtubePkg && lyrics.isEmpty()) {
-                    return@launch
-                }
+                if (pkg == youtubePkg && lyrics.isEmpty()) return@launch
 
                 val latest = currentState?.takeIf { it.trackKey == trackKey } ?: ActiveTrackState(
                     trackKey = trackKey,
                     packageName = pkg,
                     title = clean.title,
                     artist = clean.artist,
+                    durationMs = durationMs,
                     processedArt = currentState?.processedArt,
                     lyrics = emptyList(),
                     isPlaying = isPlaying,
@@ -325,7 +326,6 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
             }
         }
 
-        // Instant Art-First Pipeline (Bitmap OR ART_URI)
         if (rawCover != null || !artUri.isNullOrBlank()) {
             artJob?.cancel()
             artJob = scope.launch {
@@ -339,8 +339,6 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
                     artProcessor.process(bmp)
                 }
                 if (trackKey != currentTrackKey) return@launch
-
-                // If YouTube non-music video hasn't earned takeover, skip updating
                 if (pkg == youtubePkg && (currentState?.trackKey != trackKey)) return@launch
 
                 currentState = (currentState ?: ActiveTrackState(
@@ -348,6 +346,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
                     packageName = pkg,
                     title = clean.title,
                     artist = clean.artist,
+                    durationMs = durationMs,
                     processedArt = null,
                     lyrics = emptyList(),
                     isPlaying = isPlaying,
