@@ -11,6 +11,7 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PathMeasure
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
@@ -57,6 +58,8 @@ class BeatWallService : WallpaperService() {
         private val mainHandler = Handler(Looper.getMainLooper())
         private val proceduralAnimator = ProceduralAnimator()
 
+        private val density = resources.displayMetrics.density
+
         private var visible = false
         private var surfaceReady = false
         private var width = 1080
@@ -74,6 +77,8 @@ class BeatWallService : WallpaperService() {
 
         private var lyricsAlpha = 0f
         private var targetLyricsAlpha = 0f
+        private var waveAmp = 0f
+        private var targetWaveAmp = 0f
 
         private var lockLayouts: List<StaticLayout> = emptyList()
         private var homeLayouts: List<StaticLayout> = emptyList()
@@ -86,11 +91,15 @@ class BeatWallService : WallpaperService() {
         private var springVelocity = 0f
         private var targetY = 0f
         private var lastFrameNanos = 0L
-        private var is120HzRequested = false
+        private var currentRequestedHz = -1f
         private var frameScheduled = false
 
-        private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-        private val backlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply {
+            isDither = true
+        }
+        private val backlightPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
+            isDither = true
+        }
         private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.TRANSPARENT
             setShadowLayer(36f, 0f, 14f, 0x99000000.toInt())
@@ -98,19 +107,25 @@ class BeatWallService : WallpaperService() {
         private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             color = 0x38FFFFFF
-            strokeWidth = 2.5f
+            strokeWidth = 2.0f
         }
-        private val orbPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val progressTrackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-            color = 0x1FFFFFFF
-        }
-        private val progressFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-        }
-        private val sineWavePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        private val coverProgressGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = 4.5f
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = 4.0f * density
+        }
+        private val coverProgressPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = 2.0f * density
+        }
+        private val orbPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
+            isDither = true
+        }
+        private val squigglyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
         }
@@ -128,17 +143,21 @@ class BeatWallService : WallpaperService() {
             textAlign = Paint.Align.LEFT
             letterSpacing = 0.02f
         }
-        private val activeLyricPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        private val activeLyricPaint = TextPaint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
             color = Color.WHITE
             typeface = Typeface.create("sans-serif", Typeface.BOLD)
+            isDither = true
         }
 
         private val clipPath = Path()
-        private val sinePath = Path()
+        private val coverRimPath = Path()
+        private val coverProgressPath = Path()
+        private val pathMeasure = PathMeasure()
+        private val squigglyPath = Path()
         private val moonPath = Path()
         private val moonCutPath = Path()
         private val miniArtRect = RectF()
-        private val pillRect = RectF()
+        private val arcRect = RectF()
         private val backdropRect = RectF()
         private val lockLyricsClip = RectF()
         private val homeLyricsClip = RectF()
@@ -195,6 +214,7 @@ class BeatWallService : WallpaperService() {
                 isCharging = batteryManager.isCharging
                 isLowBattery = (!isCharging && pct in 0..14) || powerManager.isPowerSaveMode
             }
+            targetWaveAmp = if (activeState?.isPlaying == true && !isLowBattery) 1f else 0f
         }
 
         private fun currentMinuteOfDay(): Int {
@@ -231,8 +251,8 @@ class BeatWallService : WallpaperService() {
             super.onSurfaceChanged(holder, format, w, h)
             width = w.coerceAtLeast(1)
             height = h.coerceAtLeast(1)
-            lockLyricsClip.set(0f, height * 0.46f, width.toFloat(), height * 0.83f)
-            homeLyricsClip.set(0f, height * 0.32f, width.toFloat(), height * 0.72f)
+            lockLyricsClip.set(0f, height * 0.42f, width.toFloat(), height * 0.73f)
+            homeLyricsClip.set(0f, height * 0.27f, width.toFloat(), height * 0.74f)
             rebuildLayoutsIfNeeded(force = true)
             if (visible) scheduleNextFrame()
         }
@@ -282,8 +302,10 @@ class BeatWallService : WallpaperService() {
 
             activeState = state
             targetLyricsAlpha = if (state?.showLyrics == true && state.lyrics.isNotEmpty()) 1f else 0f
+            targetWaveAmp = if (state?.isPlaying == true && !isLowBattery) 1f else 0f
             if (prevKey == null && state == null) {
                 lyricsAlpha = 0f
+                waveAmp = 0f
             }
             if (artChanged) {
                 try {
@@ -326,7 +348,7 @@ class BeatWallService : WallpaperService() {
             measuredTrackKey = st.trackKey
 
             val contentW = (width * 0.82f).toInt().coerceAtLeast(200)
-            activeLyricPaint.textSize = width * 0.052f
+            activeLyricPaint.textSize = width * 0.056f
             val lineGap = height * 0.022f
 
             lockLayouts = st.lyrics.map { line ->
@@ -372,8 +394,23 @@ class BeatWallService : WallpaperService() {
             if (!visible || !surfaceReady || !powerManager.isInteractive) return false
             if (crossfadeProgress < 1f) return true
             if (abs(targetLyricsAlpha - lyricsAlpha) > 0.01f) return true
+            if (abs(targetWaveAmp - waveAmp) > 0.01f) return true
             if (isLowBattery) return false
             return true
+        }
+
+        private fun targetFrameRate(): Float {
+            if (!needsAnimation()) return 0f
+            return if (
+                activeState != null ||
+                crossfadeProgress < 1f ||
+                abs(targetLyricsAlpha - lyricsAlpha) > 0.01f ||
+                abs(targetWaveAmp - waveAmp) > 0.01f
+            ) {
+                120f
+            } else {
+                60f
+            }
         }
 
         private fun scheduleNextFrame() {
@@ -386,8 +423,9 @@ class BeatWallService : WallpaperService() {
         }
 
         private fun updateLoopState() {
-            if (needsAnimation()) {
-                setSurface120Hz(true)
+            val targetHz = targetFrameRate()
+            if (targetHz > 0f) {
+                setSurfaceFrameRate(targetHz)
                 scheduleNextFrame()
             } else {
                 stopLoop()
@@ -399,21 +437,20 @@ class BeatWallService : WallpaperService() {
                 frameScheduled = false
                 choreographer.removeFrameCallback(this)
             }
-            setSurface120Hz(false)
+            setSurfaceFrameRate(0f)
         }
 
-        private fun setSurface120Hz(enable: Boolean) {
-            if (is120HzRequested == enable || !surfaceReady) return
+        private fun setSurfaceFrameRate(hz: Float) {
+            if (currentRequestedHz == hz || !surfaceReady) return
             try {
                 val surface = surfaceHolder.surface ?: return
                 if (!surface.isValid) return
-                val rate = if (enable) 120f else 0f
                 surface.setFrameRate(
-                    rate,
+                    hz,
                     Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
                     Surface.CHANGE_FRAME_RATE_ALWAYS
                 )
-                is120HzRequested = enable
+                currentRequestedHz = hz
             } catch (_: Exception) {
             }
         }
@@ -421,7 +458,7 @@ class BeatWallService : WallpaperService() {
         override fun doFrame(frameTimeNanos: Long) {
             frameScheduled = false
             if (!visible || !surfaceReady || !powerManager.isInteractive) {
-                setSurface120Hz(false)
+                setSurfaceFrameRate(0f)
                 return
             }
 
@@ -441,6 +478,16 @@ class BeatWallService : WallpaperService() {
                 if (abs(targetLyricsAlpha - lyricsAlpha) <= 0.02f) lyricsAlpha = targetLyricsAlpha
             } else {
                 lyricsAlpha = targetLyricsAlpha
+            }
+
+            targetWaveAmp = if (activeState?.isPlaying == true && !isLowBattery) 1f else 0f
+            val waveDiff = targetWaveAmp - waveAmp
+            if (abs(waveDiff) > 0.01f) {
+                val step = (dtSec / 0.30f) * if (waveDiff > 0) 1f else -1f
+                waveAmp = (waveAmp + step).coerceIn(0f, 1f)
+                if (abs(targetWaveAmp - waveAmp) <= 0.02f) waveAmp = targetWaveAmp
+            } else {
+                waveAmp = targetWaveAmp
             }
 
             val st = activeState
@@ -464,7 +511,7 @@ class BeatWallService : WallpaperService() {
                 }
             }
 
-            setSurface120Hz(needsAnimation())
+            setSurfaceFrameRate(targetFrameRate())
             drawFrame(frameTimeNanos)
 
             if (needsAnimation()) {
@@ -553,8 +600,8 @@ class BeatWallService : WallpaperService() {
                 )
             }
 
-            val headerTop = if (isLock) height * 0.34f else height * 0.22f
-            val headerFactor = if (state.isPlaying) 1f else 0.55f
+            val headerTop = if (isLock) height * 0.32f else height * 0.17f
+            val headerFactor = if (state.isPlaying) 1f else 0.58f
             val headerAlpha = (masterAlpha * headerFactor).toInt().coerceIn(0, 255)
             drawUnifiedCompactHeader(canvas, state, art, headerTop, timeSec, accent, primary, headerAlpha)
 
@@ -562,7 +609,7 @@ class BeatWallService : WallpaperService() {
             val layouts = if (isLock) lockLayouts else homeLayouts
             val centers = if (isLock) lockYCenters else homeYCenters
             val clipRect = if (isLock) lockLyricsClip else homeLyricsClip
-            val centerY = if (isLock) height * 0.645f else height * 0.525f
+            val centerY = if (isLock) height * 0.575f else height * 0.505f
             val centerX = width * 0.09f
 
             if (lyrAlpha > 3 && layouts.isNotEmpty() && centers.isNotEmpty()) {
@@ -678,7 +725,7 @@ class BeatWallService : WallpaperService() {
             headerAlpha: Int
         ) {
             val leftMargin = width * 0.085f
-            val thumbSize = width * 0.135f
+            val thumbSize = width * 0.138f
 
             if (art != null) {
                 miniArtRect.set(leftMargin, headerTop, leftMargin + thumbSize, headerTop + thumbSize)
@@ -702,13 +749,24 @@ class BeatWallService : WallpaperService() {
                 canvas.drawBitmap(art.coverArt, null, miniArtRect, bmpPaint)
                 canvas.restore()
 
-                rimPaint.alpha = (headerAlpha * 0.30f).toInt()
+                rimPaint.alpha = (headerAlpha * 0.25f).toInt()
                 canvas.drawRoundRect(miniArtRect, radius, radius, rimPaint)
+
+                if (state.durationMs > 0L) {
+                    drawClockwiseCoverProgressRim(
+                        canvas = canvas,
+                        rect = miniArtRect,
+                        radius = radius,
+                        fraction = state.progressFraction(),
+                        accent = accent,
+                        alpha = headerAlpha
+                    )
+                }
             }
 
-            val textLeft = leftMargin + thumbSize + width * 0.038f
-            val maxTextW = width * 0.54f
-            headerTitlePaint.textSize = width * 0.041f
+            val textLeft = leftMargin + thumbSize + width * 0.042f
+            val maxTextW = width * 0.66f
+            headerTitlePaint.textSize = width * 0.042f
             headerTitlePaint.alpha = headerAlpha
             headerArtistPaint.textSize = width * 0.032f
             headerArtistPaint.alpha = (headerAlpha * 0.78f).toInt()
@@ -716,73 +774,108 @@ class BeatWallService : WallpaperService() {
             canvas.drawText(
                 ellipsize(state.title, headerTitlePaint, maxTextW),
                 textLeft,
-                headerTop + thumbSize * 0.44f,
+                headerTop + thumbSize * 0.38f,
                 headerTitlePaint
             )
             canvas.drawText(
                 ellipsize(state.artist, headerArtistPaint, maxTextW),
                 textLeft,
-                headerTop + thumbSize * 0.80f,
+                headerTop + thumbSize * 0.70f,
                 headerArtistPaint
             )
 
-            // Silky Mini Sine Wave on right edge of header
-            if (state.isPlaying && !isLowBattery) {
-                drawSilkyMiniSineWave(canvas, timeSec, width * 0.885f, headerTop + thumbSize * 0.5f, accent, headerAlpha)
-            }
-
-            if (state.durationMs > 0L) {
-                val barTop = headerTop + thumbSize + height * 0.014f
-                val barW = width * 0.83f
-                drawProgressHairline(canvas, leftMargin, barTop, barW, state.progressFraction(), accent, headerAlpha)
-            }
+            // Pixel-inspired squiggly wave under Artist name (smoothly flattens to straight line when paused)
+            drawPixelSquigglyWave(
+                canvas = canvas,
+                timeSec = timeSec,
+                startX = textLeft,
+                centerY = headerTop + thumbSize * 0.94f,
+                waveW = width * 0.38f,
+                ampScale = waveAmp,
+                accent = accent,
+                alpha = headerAlpha
+            )
         }
 
-        private fun drawProgressHairline(
+        private fun drawClockwiseCoverProgressRim(
             canvas: Canvas,
-            left: Float,
-            top: Float,
-            totalW: Float,
+            rect: RectF,
+            radius: Float,
             fraction: Float,
             accent: Int,
             alpha: Int
         ) {
-            val h = 3f
-            progressTrackPaint.alpha = (alpha * 0.12f).toInt()
-            pillRect.set(left, top, left + totalW, top + h)
-            canvas.drawRoundRect(pillRect, h / 2f, h / 2f, progressTrackPaint)
+            val frac = fraction.coerceIn(0f, 1f)
+            if (frac <= 0.002f) return
 
-            val fillW = (totalW * fraction).coerceAtLeast(h)
-            progressFillPaint.color = accent
-            progressFillPaint.alpha = (alpha * 0.80f).toInt()
-            pillRect.set(left, top, left + fillW, top + h)
-            canvas.drawRoundRect(pillRect, h / 2f, h / 2f, progressFillPaint)
+            val cx = rect.centerX()
+            val l = rect.left
+            val t = rect.top
+            val r = rect.right
+            val b = rect.bottom
+            val cr = radius.coerceAtMost(minOf(rect.width(), rect.height()) * 0.5f)
+            val d = cr * 2f
+
+            coverRimPath.reset()
+            coverRimPath.moveTo(cx, t)
+            coverRimPath.lineTo(r - cr, t)
+            arcRect.set(r - d, t, r, t + d)
+            coverRimPath.arcTo(arcRect, -90f, 90f, false)
+            coverRimPath.lineTo(r, b - cr)
+            arcRect.set(r - d, b - d, r, b)
+            coverRimPath.arcTo(arcRect, 0f, 90f, false)
+            coverRimPath.lineTo(l + cr, b)
+            arcRect.set(l, b - d, l + d, b)
+            coverRimPath.arcTo(arcRect, 90f, 90f, false)
+            coverRimPath.lineTo(l, t + cr)
+            arcRect.set(l, t, l + d, t + d)
+            coverRimPath.arcTo(arcRect, 180f, 90f, false)
+            coverRimPath.close()
+
+            pathMeasure.setPath(coverRimPath, false)
+            val totalLen = pathMeasure.length
+            if (totalLen <= 0f) return
+
+            coverProgressPath.reset()
+            pathMeasure.getSegment(0f, totalLen * frac, coverProgressPath, true)
+
+            coverProgressGlowPaint.color = accent
+            coverProgressGlowPaint.alpha = (alpha * 0.34f).toInt()
+            canvas.drawPath(coverProgressPath, coverProgressGlowPaint)
+
+            coverProgressPaint.color = accent
+            coverProgressPaint.alpha = (alpha * 0.94f).toInt()
+            canvas.drawPath(coverProgressPath, coverProgressPaint)
         }
 
-        private fun drawSilkyMiniSineWave(
+        private fun drawPixelSquigglyWave(
             canvas: Canvas,
             timeSec: Double,
-            centerX: Float,
+            startX: Float,
             centerY: Float,
+            waveW: Float,
+            ampScale: Float,
             accent: Int,
             alpha: Int
         ) {
-            val waveW = width * 0.068f
-            val startX = centerX - waveW / 2f
-            val amp = width * 0.014f
-            val steps = 16
-
-            sinePath.reset()
+            val amp = width * 0.0075f * ampScale
+            val steps = 36
+            squigglyPath.reset()
             for (s in 0..steps) {
                 val frac = s.toFloat() / steps
                 val x = startX + frac * waveW
-                val env = sin(frac * PI).toFloat()
-                val y = centerY + sin(frac * 3.0 * PI - timeSec * 5.5).toFloat() * amp * env
-                if (s == 0) sinePath.moveTo(x, y) else sinePath.lineTo(x, y)
+                val edgeTaper = sin(frac * PI).toFloat().coerceAtLeast(0.18f)
+                val y = if (amp > 0.1f) {
+                    centerY + sin(frac * 6.0 * PI - timeSec * 5.2).toFloat() * amp * edgeTaper
+                } else {
+                    centerY
+                }
+                if (s == 0) squigglyPath.moveTo(x, y) else squigglyPath.lineTo(x, y)
             }
-            sineWavePaint.color = accent
-            sineWavePaint.alpha = (alpha * 0.88f).toInt()
-            canvas.drawPath(sinePath, sineWavePaint)
+            squigglyPaint.strokeWidth = width * 0.0040f
+            squigglyPaint.color = accent
+            squigglyPaint.alpha = (alpha * (0.42f + 0.48f * ampScale)).toInt().coerceIn(0, 255)
+            canvas.drawPath(squigglyPath, squigglyPaint)
         }
 
         private fun drawWindowedKaraokeLyrics(

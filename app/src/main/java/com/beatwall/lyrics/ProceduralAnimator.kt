@@ -11,11 +11,6 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
 
-/**
- * 100% Volumetric Light Engine (Zero rings, zero arcs, zero wireframe lines).
- * 6 Volumetric Archetypes x 4 ColorModes x 3 Tempos x 3 Densities x 2 Directions = 432 combinations
- * at an elegant, noticeable 25%-38% opacity in both Music and Circadian modes.
- */
 data class AnimationDna(
     val archetype: Int,
     val colorMode: Int,
@@ -27,7 +22,7 @@ data class AnimationDna(
 class ProceduralAnimator {
 
     private var dna = rollRandom(-1, calmOnly = false)
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG)
 
     fun reroll(calmOnly: Boolean = false) {
         dna = rollRandom(dna.archetype, calmOnly)
@@ -101,7 +96,6 @@ class ProceduralAnimator {
         }
     }
 
-    // 0: Dual drifting aurora clouds
     private fun drawAuroraClouds(canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, alpha: Int) {
         val cx1 = w * 0.45f + sin(t * 0.42).toFloat() * (w * 0.24f)
         val cy1 = h * 0.44f + cos(t * 0.32).toFloat() * (h * 0.12f)
@@ -124,7 +118,6 @@ class ProceduralAnimator {
         canvas.drawCircle(cx2, cy2, r2, paint)
     }
 
-    // 1: Slow Lava-Lamp color blobs
     private fun drawLavaLampBlobs(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
@@ -148,7 +141,6 @@ class ProceduralAnimator {
         }
     }
 
-    // 2: Soft Bokeh light pools
     private fun drawBokehLightPools(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
@@ -168,7 +160,6 @@ class ProceduralAnimator {
         }
     }
 
-    // 3: Soft Diagonal God-Rays / Light Pillars
     private fun drawDiagonalGodRays(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
@@ -189,7 +180,6 @@ class ProceduralAnimator {
         }
     }
 
-    // 4: Twin Orbiting Nebulas
     private fun drawOrbitingNebulas(canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, alpha: Int) {
         val cx = w * 0.5f
         val cy = h * 0.50f
@@ -210,7 +200,6 @@ class ProceduralAnimator {
         }
     }
 
-    // 5: Feathered Edge Nebula Glow (zero hard lines)
     private fun drawSoftEdgeNebula(canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, alpha: Int) {
         val p1 = 0.55f + 0.45f * ((sin(t * 0.9) + 1.0) * 0.5).toFloat()
         val p2 = 0.55f + 0.45f * ((cos(t * 0.8) + 1.0) * 0.5).toFloat()
