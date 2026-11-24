@@ -65,7 +65,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         "com.google.android.youtube"
     )
     private val youtubePkg = "com.google.android.youtube"
-    private val pauseGraceMs = 60_000L
+    private val pauseGraceMs = 3_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -87,6 +87,8 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
     private var sessionsRegistered = false
 
     private val pauseTimeoutRunnable = Runnable {
+        lyricsJob?.cancel()
+        artJob?.cancel()
         currentTrackKey = null
         artLoadedForTrackKey = null
         currentArtSignature = null
@@ -153,9 +155,17 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
 
     private fun selectController(controllers: List<MediaController>) {
         val allowed = controllers.filter { it.packageName in allowedPackages }
-        val chosen = allowed.firstOrNull {
-            it.playbackState?.state == PlaybackState.STATE_PLAYING
-        } ?: allowed.firstOrNull()
+        val playing = allowed.firstOrNull {
+            val st = it.playbackState?.state
+            st == PlaybackState.STATE_PLAYING || st == PlaybackState.STATE_BUFFERING
+        }
+        val chosen = playing ?: if (currentState != null) {
+            allowed.firstOrNull { it.sessionToken == activeController?.sessionToken }
+        } else {
+            // Never resurrect a paused session when already in Circadian Idle;
+            // still keep the first allowed controller attached only to listen for STATE_PLAYING.
+            allowed.firstOrNull()
+        }
 
         if (chosen?.sessionToken == activeController?.sessionToken) {
             if (chosen != null) handleControllerUpdate(chosen)
@@ -188,6 +198,10 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         if (isPlaying) {
             mainHandler.removeCallbacks(pauseTimeoutRunnable)
         } else if (stateCode == PlaybackState.STATE_PAUSED) {
+            if (currentState == null) {
+                // Already in Circadian Idle; never resurrect paused track
+                return
+            }
             mainHandler.removeCallbacks(pauseTimeoutRunnable)
             mainHandler.postDelayed(pauseTimeoutRunnable, pauseGraceMs)
         } else if (stateCode == PlaybackState.STATE_STOPPED || stateCode == PlaybackState.STATE_NONE) {
@@ -235,7 +249,13 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
             return
         }
 
-        val isPlaying = stateCode == PlaybackState.STATE_PLAYING
+        val isPlaying = stateCode == PlaybackState.STATE_PLAYING ||
+            stateCode == PlaybackState.STATE_BUFFERING
+        if (!isPlaying && currentState == null) {
+            // In Circadian Idle and track is paused: ignore completely until Play is pressed
+            return
+        }
+
         if (isPlaying) {
             mainHandler.removeCallbacks(pauseTimeoutRunnable)
         } else if (stateCode == PlaybackState.STATE_PAUSED) {
@@ -291,7 +311,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
                     durationMs = durationMs,
                     processedArt = currentState?.processedArt,
                     lyrics = emptyList(),
-                    isPlaying = isPlaying,
+                    isPlaying = stateCode == PlaybackState.STATE_PLAYING,
                     showLyrics = false,
                     basePositionMs = basePos,
                     lastUpdateElapsedMs = updateElapsed,
@@ -314,7 +334,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
                     durationMs = durationMs,
                     processedArt = currentState?.processedArt,
                     lyrics = emptyList(),
-                    isPlaying = isPlaying,
+                    isPlaying = stateCode == PlaybackState.STATE_PLAYING,
                     showLyrics = false,
                     basePositionMs = basePos,
                     lastUpdateElapsedMs = updateElapsed,
@@ -353,7 +373,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
                 durationMs = durationMs,
                 processedArt = null,
                 lyrics = emptyList(),
-                isPlaying = isPlaying,
+                isPlaying = stateCode == PlaybackState.STATE_PLAYING,
                 showLyrics = false,
                 basePositionMs = basePos,
                 lastUpdateElapsedMs = updateElapsed,
@@ -372,7 +392,6 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
             val h = bmp.height
             if (w < 16 || h < 16) return false
             var grayCount = 0
-            val samples = 25
             for (sy in 0 until 5) {
                 for (sx in 0 until 5) {
                     val px = bmp.getPixel((w * (sx + 1)) / 6, (h * (sy + 1)) / 6)
@@ -384,7 +403,6 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
                     }
                 }
             }
-            // Also check center pixel is near-black or near-white (target bullseye)
             val center = bmp.getPixel(w / 2, h / 2)
             val cMax = maxOf(Color.red(center), Color.green(center), Color.blue(center))
             val cMin = minOf(Color.red(center), Color.green(center), Color.blue(center))
