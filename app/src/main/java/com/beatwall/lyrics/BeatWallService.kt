@@ -108,6 +108,12 @@ class BeatWallService : WallpaperService() {
         private val progressFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
         }
+        private val sineWavePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 4.5f
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
         private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
         private val headerTitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -128,6 +134,7 @@ class BeatWallService : WallpaperService() {
         }
 
         private val clipPath = Path()
+        private val sinePath = Path()
         private val moonPath = Path()
         private val moonCutPath = Path()
         private val miniArtRect = RectF()
@@ -258,7 +265,6 @@ class BeatWallService : WallpaperService() {
             val newKey = state?.trackKey
             val artChanged = activeState?.processedArt !== state?.processedArt
 
-            // Trigger smooth 550ms melt whenever track OR artwork changes (no flicker!)
             if (prevKey != newKey || artChanged) {
                 if (activeState != null) {
                     prevState = activeState
@@ -480,7 +486,6 @@ class BeatWallService : WallpaperService() {
                 canvas.drawColor(0xFF05060A.toInt())
 
                 if (crossfadeProgress < 1f && prevState != null) {
-                    // Cubic ease-in-out melt between previous and next song
                     val eased = crossfadeProgress * crossfadeProgress * (3f - 2f * crossfadeProgress)
                     drawState(canvas, prevState, isLock, 1f - eased, frameTimeNanos)
                     drawState(canvas, activeState, isLock, eased, frameTimeNanos)
@@ -721,9 +726,9 @@ class BeatWallService : WallpaperService() {
                 headerArtistPaint
             )
 
-            // Whisper-quiet 3-dot pulse on right edge of header
+            // Silky Mini Sine Wave on right edge of header
             if (state.isPlaying && !isLowBattery) {
-                drawWhisper3DotPulse(canvas, timeSec, width * 0.89f, headerTop + thumbSize * 0.5f, accent, headerAlpha)
+                drawSilkyMiniSineWave(canvas, timeSec, width * 0.885f, headerTop + thumbSize * 0.5f, accent, headerAlpha)
             }
 
             if (state.durationMs > 0L) {
@@ -754,7 +759,7 @@ class BeatWallService : WallpaperService() {
             canvas.drawRoundRect(pillRect, h / 2f, h / 2f, progressFillPaint)
         }
 
-        private fun drawWhisper3DotPulse(
+        private fun drawSilkyMiniSineWave(
             canvas: Canvas,
             timeSec: Double,
             centerX: Float,
@@ -762,15 +767,22 @@ class BeatWallService : WallpaperService() {
             accent: Int,
             alpha: Int
         ) {
-            dotPaint.color = accent
-            val baseR = width * 0.0065f
-            val gap = width * 0.022f
-            for (d in -1..1) {
-                val phase = timeSec * 3.2 - (d + 1) * 0.8
-                val wave = 0.35f + 0.65f * ((sin(phase) + 1.0) * 0.5).toFloat()
-                dotPaint.alpha = (alpha * (0.35f + 0.50f * wave)).toInt().coerceIn(0, 255)
-                canvas.drawCircle(centerX + d * gap, centerY, baseR * (0.85f + 0.30f * wave), dotPaint)
+            val waveW = width * 0.068f
+            val startX = centerX - waveW / 2f
+            val amp = width * 0.014f
+            val steps = 16
+
+            sinePath.reset()
+            for (s in 0..steps) {
+                val frac = s.toFloat() / steps
+                val x = startX + frac * waveW
+                val env = sin(frac * PI).toFloat()
+                val y = centerY + sin(frac * 3.0 * PI - timeSec * 5.5).toFloat() * amp * env
+                if (s == 0) sinePath.moveTo(x, y) else sinePath.lineTo(x, y)
             }
+            sineWavePaint.color = accent
+            sineWavePaint.alpha = (alpha * 0.88f).toInt()
+            canvas.drawPath(sinePath, sineWavePaint)
         }
 
         private fun drawWindowedKaraokeLyrics(
