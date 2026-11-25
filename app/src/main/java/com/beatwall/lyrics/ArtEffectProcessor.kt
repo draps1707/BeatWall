@@ -81,7 +81,7 @@ class ArtEffectProcessor {
         shader = BitmapShader(grainBmp, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
     }
 
-    fun getCircadianTheme(dayOfMonth: Int, minuteOfDay: Int, sunAltDeg: Float = 35f): CircadianTheme {
+    fun getCircadianTheme(dayOfMonth: Int, minuteOfDay: Int, sunAltDeg: Float = 35f, humidityPct: Int = 55): CircadianTheme {
         val existing = cachedCircadianTheme
         val refreshWindow = if (sunAltDeg in -14f..12f || minuteOfDay >= 1430 || minuteOfDay <= 10) 3 else 10
         if (existing != null && existing.dayKey == dayOfMonth && abs(minuteOfDay - existing.minuteKey) < refreshWindow) {
@@ -124,17 +124,31 @@ class ArtEffectProcessor {
                 )
             }
             else -> {
-                // Deep Astronomical Night
-                arrayOf(0xFF030612.toInt(), 0xFF0B132B.toInt(), 0xFF1E293B.toInt(), 0xFF93C5FD.toInt())
+                // Deep Astronomical Night -> True OLED Pitch Black zenith below -18 deg
+                val oledT = ((-12f - sunAltDeg) / 8f).coerceIn(0f, 1f)
+                arrayOf(
+                    ColorUtils.blendARGB(0xFF030612.toInt(), 0xFF000000.toInt(), oledT),
+                    ColorUtils.blendARGB(0xFF0B132B.toInt(), 0xFF03050A.toInt(), oledT),
+                    ColorUtils.blendARGB(0xFF1E293B.toInt(), 0xFF090D18.toInt(), oledT),
+                    0xFF93C5FD.toInt()
+                )
             }
         }
 
         val isDay = sunAltDeg > -2f
         val biome = NatureBiomes.getBlendedBiome(dayOfMonth, minuteOfDay)
-        val biomeWeight = if (sunAltDeg > 10f) 0.18f else if (isDay) 0.25f else 0.48f
-        val zenith = ColorUtils.blendARGB(baseZenith, biome.zenith, biomeWeight)
+        val biomeWeight = if (sunAltDeg > 10f) 0.18f else if (isDay) 0.25f else if (sunAltDeg < -18f) 0.25f else 0.48f
+        var zenith = ColorUtils.blendARGB(baseZenith, biome.zenith, biomeWeight)
+        if (sunAltDeg < -18f) {
+            val oledPure = ((-18f - sunAltDeg) / 6f).coerceIn(0f, 1f)
+            zenith = ColorUtils.blendARGB(zenith, 0xFF000000.toInt(), oledPure * 0.85f)
+        }
         val midSky = ColorUtils.blendARGB(baseMid, biome.midSky, biomeWeight)
-        val paleHorizon = ColorUtils.blendARGB(baseHorizon, biome.horizon, if (isDay) 0.16f else 0.38f)
+        var paleHorizon = ColorUtils.blendARGB(baseHorizon, biome.horizon, if (isDay) 0.16f else 0.38f)
+        if (sunAltDeg in -5f..8f && humidityPct > 55) {
+            val humWarmth = ((humidityPct - 55) / 45f).coerceIn(0f, 1f) * 0.28f
+            paleHorizon = ColorUtils.blendARGB(paleHorizon, 0xFFEA580C.toInt(), humWarmth)
+        }
         val accent = ColorUtils.blendARGB(baseAccent, biome.accent, 0.35f)
 
         val seaTop = if (isDay) {
@@ -142,17 +156,24 @@ class ArtEffectProcessor {
         } else {
             ColorUtils.blendARGB(0xFF040D1A.toInt(), paleHorizon, 0.30f)
         }
-        val seaDeep = if (isDay) {
+        val baseSeaDeep = if (isDay) {
             ColorUtils.blendARGB(0xFF0C3659.toInt(), midSky, 0.22f)
         } else {
             0xFF020612.toInt()
+        }
+        // Snell's Law shallow-water turquoise shift at high noon (> 30 deg sun altitude)
+        val seaDeep = if (sunAltDeg > 30f) {
+            val noonSnell = ((sunAltDeg - 30f) / 35f).coerceIn(0f, 1f)
+            ColorUtils.blendARGB(baseSeaDeep, 0xFF0E7490.toInt(), noonSnell * 0.45f)
+        } else {
+            baseSeaDeep
         }
         val wetSand = if (isDay) {
             ColorUtils.blendARGB(0xFF1F2024.toInt(), paleHorizon, 0.12f)
         } else {
             0xFF06080D.toInt()
         }
-        val shoreDark = if (isDay) 0xFF121316.toInt() else 0xFF030508.toInt()
+        val shoreDark = if (isDay) 0xFF121316.toInt() else if (sunAltDeg < -18f) 0xFF000000.toInt() else 0xFF030508.toInt()
 
         val horizonY = circHeight * 0.66f
         val shoreY = circHeight * 0.85f
@@ -190,6 +211,18 @@ class ArtEffectProcessor {
             )
         }
         canvas.drawRect(0f, shoreY - 18f, circWidth.toFloat(), circHeight.toFloat(), shorePaint)
+        // Top Icon Luminance Guard at solar noon so status bar & top app labels stay crisp
+        if (isDay) {
+            val guardPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
+                shader = LinearGradient(
+                    0f, 0f, 0f, circHeight * 0.22f,
+                    intArrayOf(0x2804060A, Color.TRANSPARENT),
+                    null,
+                    Shader.TileMode.CLAMP
+                )
+            }
+            canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight * 0.22f, guardPaint)
+        }
         canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), grainPaint)
 
         return CircadianTheme(

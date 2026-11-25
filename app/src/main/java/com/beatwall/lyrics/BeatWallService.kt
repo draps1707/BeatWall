@@ -115,48 +115,52 @@ class BeatWallService : WallpaperService() {
         private var lastSkyComputeMs = 0L
 
         private fun effectiveTimeMillisAndMinute(): Pair<Long, Int> {
-            val prevHour = LocationStore.getPreviewHour(applicationContext)
-            if (prevHour >= 0) {
+            val prevMin = LocationStore.getPreviewMinute(applicationContext)
+            if (prevMin >= 0) {
                 val cal = Calendar.getInstance().apply {
-                    set(Calendar.HOUR_OF_DAY, prevHour)
-                    set(Calendar.MINUTE, 15)
+                    set(Calendar.HOUR_OF_DAY, prevMin / 60)
+                    set(Calendar.MINUTE, prevMin % 60)
                 }
-                return cal.timeInMillis to (prevHour * 60 + 15)
+                return cal.timeInMillis to prevMin
             }
             return System.currentTimeMillis() to currentMinuteOfDay()
         }
 
-        private fun getSkySnapshot(): SkySnapshot {
-            val prevHour = LocationStore.getPreviewHour(applicationContext)
+        private fun getSkySnapshot(isLock: Boolean): SkySnapshot {
+            val prevMin = LocationStore.getPreviewMinute(applicationContext)
             val nowMs = System.currentTimeMillis()
             val existing = cachedSkySnapshot
-            if (prevHour < 0 && existing != null && kotlin.math.abs(nowMs - lastSkyComputeMs) < 30_000L) {
+            if (prevMin < 0 && existing != null && kotlin.math.abs(nowMs - lastSkyComputeMs) < 30_000L) {
                 return existing
             }
             val loc = LocationStore.load(applicationContext)
             val (targetMs, _) = effectiveTimeMillisAndMinute()
-            return SkyAstronomy.compute(targetMs, loc.lat, loc.lon).also {
-                cachedSkySnapshot = it
-                lastSkyComputeMs = nowMs
-            }
+            val snap = SkyAstronomy.compute(targetMs, loc.lat, loc.lon)
+            val horizonY = height * 0.66f
+            val topY = if (isLock) height * 0.09f else height * 0.07f
+            visibleStarCount = SkyAstronomy.projectStars(
+                snap.lstDeg, snap.latDeg, width, horizonY, topY,
+                starX, starY, starR, starCol, starMag
+            )
+            visibleMwCount = SkyAstronomy.projectMilkyWay(
+                snap.lstDeg, snap.latDeg, width, horizonY, topY, mwX, mwY
+            )
+            cachedSkySnapshot = snap
+            lastSkyComputeMs = nowMs
+            return snap
         }
 
-        // Pre-computed night starfield (zero per-frame allocation)
-        private val starCount = 38
-        private val starX = FloatArray(starCount)
-        private val starY = FloatArray(starCount)
-        private val starR = FloatArray(starCount)
-        private val starPhase = FloatArray(starCount)
-
-        init {
-            val rng = Random(2026)
-            for (i in 0 until starCount) {
-                starX[i] = rng.nextFloat()
-                starY[i] = 0.05f + rng.nextFloat() * 0.58f
-                starR[i] = 1.0f + rng.nextFloat() * 1.4f
-                starPhase[i] = rng.nextFloat() * (2f * PI.toFloat())
-            }
-        }
+        // Pre-allocated sidereal star & Milky Way projection buffers (updated once every 30s, 0 allocations/frame)
+        private val maxStars = 120
+        private var visibleStarCount = 0
+        private val starX = FloatArray(maxStars)
+        private val starY = FloatArray(maxStars)
+        private val starR = FloatArray(maxStars)
+        private val starCol = IntArray(maxStars)
+        private val starMag = FloatArray(maxStars)
+        private val mwX = FloatArray(10)
+        private val mwY = FloatArray(10)
+        private var visibleMwCount = 0
 
         // Reusable shader & matrix cache (zero per-frame allocations at 120 Hz)
         private val shaderMatrix = Matrix()
@@ -345,7 +349,7 @@ class BeatWallService : WallpaperService() {
                     WallpaperColors.HINT_SUPPORTS_DARK_THEME
                 )
             }
-            val sky = getSkySnapshot()
+            val sky = getSkySnapshot(keyguardManager.isKeyguardLocked)
             val circ = artProcessor.getCircadianTheme(currentDayOfMonth(), currentMinuteOfDay(), sky.sunAltDeg)
             return WallpaperColors(
                 Color.valueOf(circ.accent),
@@ -735,15 +739,15 @@ class BeatWallService : WallpaperService() {
             val timeSec = frameTimeNanos / 1_000_000_000.0
 
             if (state == null) {
-                val sky = getSkySnapshot()
+                val sky = getSkySnapshot(isLock)
                 val (_, effMin) = effectiveTimeMillisAndMinute()
-                val circ = artProcessor.getCircadianTheme(currentDayOfMonth(), effMin, sky.sunAltDeg)
                 val loc = LocationStore.load(applicationContext)
-                val weather = WeatherClient.getCachedOrRefresh(applicationContext, loc.lat, loc.lon)
+                val weatherState = WeatherClient.getCachedOrRefresh(applicationContext, loc.lat, loc.lon)
+                val circ = artProcessor.getCircadianTheme(currentDayOfMonth(), effMin, sky.sunAltDeg, weatherState.humidityPct)
                 bmpPaint.alpha = masterAlpha
                 backdropRect.set(0f, 0f, width.toFloat(), height.toFloat())
                 canvas.drawBitmap(circ.backdrop, null, backdropRect, bmpPaint)
-                drawMotherEarthCircadianScene(canvas, circ, sky, weather, isLock, timeSec, masterAlpha)
+                drawMotherEarthCircadianScene(canvas, circ, sky, weatherState, isLock, timeSec, masterAlpha)
                 return
             }
 
@@ -831,14 +835,16 @@ class BeatWallService : WallpaperService() {
             canvas: Canvas,
             circ: CircadianTheme,
             sky: SkySnapshot,
-            weather: SkyWeather,
+            weatherState: WeatherState,
             isLock: Boolean,
             timeSec: Double,
             masterAlpha: Int
         ) {
             val isDay = sky.sunAltDeg > -2f
             val horizonY = height * 0.66f
-            val shoreY = height * 0.85f
+            // Gravitational Tidal Shoreline (83%..87% height)
+            val shoreY = height * (0.85f - sky.tideFrac * 0.018f)
+            val weather = weatherState.sky
 
             val sunX = projectAzimuthToX(sky.sunAzDeg)
             val sunY = projectAltitudeToY(sky.sunAltDeg, horizonY, isLock)
@@ -846,114 +852,6 @@ class BeatWallService : WallpaperService() {
             val moonY = projectAltitudeToY(sky.moonAltDeg, horizonY, isLock)
             val orbX = if (sky.sunAltDeg > -4f) sunX else moonX
 
-            // Clip all sky bodies strictly above the sea horizon so sunrise/sunset/moonrise sink into water
-            canvas.save()
-            canvas.clipRect(0f, 0f, width.toFloat(), horizonY)
-
-            // 1. Twilight-aware Stars & Shooting Stars (fade in smoothly as Sun drops below -3°)
-            val starFade = ((-3f - sky.sunAltDeg) / 9f).coerceIn(0f, 1f)
-            if (starFade > 0.02f) {
-                orbPaint.shader = null
-                orbPaint.color = Color.WHITE
-                for (i in 0 until starCount) {
-                    val twinkle = 0.35f + 0.65f * ((sin(timeSec * 1.1 + starPhase[i]) + 1.0) * 0.5).toFloat()
-                    orbPaint.alpha = (masterAlpha * 0.46f * starFade * twinkle).toInt().coerceIn(0, 255)
-                    canvas.drawCircle(starX[i] * width, starY[i] * height, starR[i] * (density * 0.42f), orbPaint)
-                }
-                if (starFade > 0.45f) {
-                    val period = if (circ.particleKind == 4) 11.0 else 28.0
-                    val phase = timeSec % period
-                    if (phase < 0.70) {
-                        val prog = (phase / 0.70).toFloat()
-                        val sx = width * (0.80f - prog * 0.44f)
-                        val sy = height * (0.10f + prog * 0.18f)
-                        val ex = sx + width * 0.08f * (1f - prog * 0.3f)
-                        val ey = sy - height * 0.035f * (1f - prog * 0.3f)
-                        val fade = sin(prog * PI).toFloat() * starFade
-                        baselinePaint.strokeWidth = density * 1.3f
-                        baselinePaint.color = Color.WHITE
-                        baselinePaint.alpha = (masterAlpha * 0.75f * fade).toInt().coerceIn(0, 255)
-                        canvas.drawLine(sx, sy, ex, ey, baselinePaint)
-                    }
-                }
-            }
-
-            // 2A. Real Sun (if above -3° horizon) with Kasten-Young Air-Mass Color
-            if (sky.sunAltDeg > -3f) {
-                val horizonFade = ((sky.sunAltDeg + 3f) / 3f).coerceIn(0f, 1f)
-                val coronaCol = if (isCharging) 0xFF34D399.toInt() else sky.sunCoronaColor
-                val pulse = if (isCharging) 0.75f + 0.25f * sin(timeSec * 2.2).toFloat() else 1f
-                val glowR = width * 0.16f
-                orbPaint.shader = RadialGradient(
-                    sunX, sunY, glowR,
-                    intArrayOf(
-                        (coronaCol and 0x00FFFFFF) or (((masterAlpha * 0.48f * horizonFade * pulse).toInt()) shl 24),
-                        (coronaCol and 0x00FFFFFF) or (((masterAlpha * 0.14f * horizonFade * pulse).toInt()) shl 24),
-                        Color.TRANSPARENT
-                    ),
-                    null, Shader.TileMode.CLAMP
-                )
-                canvas.drawCircle(sunX, sunY, glowR, orbPaint)
-                orbPaint.shader = null
-
-                orbPaint.color = sky.sunColor
-                orbPaint.alpha = (masterAlpha * 0.94f * horizonFade).toInt()
-                canvas.drawCircle(sunX, sunY, width * 0.021f, orbPaint)
-            }
-
-            // 2B. Real-Phase Moon (even in daytime if above horizon!) rotated by Bright-Limb Tilt (χ_local)
-            if (sky.moonAltDeg > -2f) {
-                val moonHorizonFade = ((sky.moonAltDeg + 2f) / 2.5f).coerceIn(0f, 1f)
-                val dayVisibility = if (isDay) 0.42f else 0.94f
-                val r = width * 0.024f * sky.moonSizeScale
-                val moonGlowR = r * 5.2f
-                val glowCol = if (isCharging && sky.sunAltDeg <= -3f) 0xFF34D399.toInt() else circ.accent
-                orbPaint.shader = RadialGradient(
-                    moonX, moonY, moonGlowR,
-                    intArrayOf(
-                        (glowCol and 0x00FFFFFF) or (((masterAlpha * 0.34f * moonHorizonFade * dayVisibility).toInt()) shl 24),
-                        Color.TRANSPARENT
-                    ),
-                    null, Shader.TileMode.CLAMP
-                )
-                canvas.drawCircle(moonX, moonY, moonGlowR, orbPaint)
-                orbPaint.shader = null
-
-                canvas.save()
-                canvas.translate(moonX, moonY)
-                canvas.rotate(sky.moonLimbTiltDeg)
-
-                // Subtle Earthshine on unlit portion at night
-                if (!isDay) {
-                    orbPaint.color = Color.WHITE
-                    orbPaint.alpha = (masterAlpha * 0.12f * moonHorizonFade).toInt()
-                    canvas.drawCircle(0f, 0f, r, orbPaint)
-                }
-
-                // Render exact illuminated phase fraction (0% New -> 50% Quarter -> 98% Gibbous -> 100% Full)
-                val k = sky.moonIllumination.coerceIn(0.02f, 1f)
-                val termRx = r * kotlin.math.abs(2f * k - 1f)
-                moonPath.reset()
-                // Lit half-circle on top/right side (rotated to face Sun via moonLimbTiltDeg)
-                arcRect.set(-r, -r, r, r)
-                moonPath.arcTo(arcRect, -90f, 180f, true)
-                arcRect.set(-termRx, -r, termRx, r)
-                if (k >= 0.5f) {
-                    // Gibbous: bulge outward
-                    moonPath.arcTo(arcRect, 90f, 180f, false)
-                } else {
-                    // Crescent: curve inward
-                    moonPath.arcTo(arcRect, 90f, -180f, false)
-                }
-                moonPath.close()
-
-                orbPaint.color = if (isDay) 0xFFF1F5F9.toInt() else Color.WHITE
-                orbPaint.alpha = (masterAlpha * dayVisibility * moonHorizonFade).toInt()
-                canvas.drawPath(moonPath, orbPaint)
-                canvas.restore()
-            }
-
-            // Helper: cached unit RadialGradient for zero-alloc soft mist/clouds/reflections
             fun drawSoftOval(cx: Float, cy: Float, rx: Float, ry: Float, colWithAlpha: Int) {
                 val sh = if (cachedSoftMistColor == colWithAlpha && cachedSoftMistShader != null) {
                     cachedSoftMistShader!!
@@ -978,35 +876,199 @@ class BeatWallService : WallpaperService() {
                 orbPaint.shader = null
             }
 
-            // 3. Soft Organic Feathered Clouds (Day & Evening, zero pill shapes!) + 2 Distant Gulls
+            // Clip all sky bodies strictly above the sea horizon
+            canvas.save()
+            canvas.clipRect(0f, 0f, width.toFloat(), horizonY)
+
+            // 1A. Milky Way Band (rotates with LST during dark astronomical night)
+            val mwFade = ((-10f - sky.sunAltDeg) / 8f).coerceIn(0f, 1f)
+            if (mwFade > 0.05f && visibleMwCount > 0 && weather == SkyWeather.CLEAR) {
+                val mwCol = (0x00A5B4FC) or (((masterAlpha * 0.09f * mwFade).toInt().coerceIn(0, 255)) shl 24)
+                for (mIdx in 0 until visibleMwCount) {
+                    drawSoftOval(mwX[mIdx], mwY[mIdx], width * 0.24f, height * 0.09f, mwCol)
+                }
+            }
+
+            // 1B. Real Sidereal Stars & 5 Naked-Eye Planets (magnitude-thresholded at twilight)
+            val starFade = ((-3f - sky.sunAltDeg) / 9f).coerceIn(0f, 1f)
+            if (starFade > 0.02f) {
+                val cloudDim = (1f - (weatherState.cloudCoverPct / 140f)).coerceIn(0.25f, 1f)
+                orbPaint.shader = null
+                for (i in 0 until visibleStarCount) {
+                    // Brightest stars emerge earlier in twilight
+                    val magThresh = ((-3f - sky.sunAltDeg) / 9f) * 4.5f - 1.5f
+                    if (starMag[i] > magThresh) continue
+                    val twinkle = 0.45f + 0.55f * ((sin(timeSec * 1.3 + i * 1.7) + 1.0) * 0.5).toFloat()
+                    orbPaint.color = starCol[i]
+                    orbPaint.alpha = (masterAlpha * 0.62f * starFade * cloudDim * twinkle).toInt().coerceIn(0, 255)
+                    canvas.drawCircle(starX[i], starY[i], starR[i] * (density * 0.42f), orbPaint)
+                }
+
+                // 5 Naked-Eye Planets (Mercury, Venus, Mars, Jupiter, Saturn)
+                for (p in sky.planets) {
+                    val px = projectAzimuthToX(p.azDeg)
+                    val py = projectAltitudeToY(p.altDeg, horizonY, isLock)
+                    orbPaint.color = p.color
+                    orbPaint.alpha = (masterAlpha * 0.90f * starFade * cloudDim).toInt().coerceIn(0, 255)
+                    canvas.drawCircle(px, py, density * (if (p.name == "Venus" || p.name == "Jupiter") 2.1f else 1.5f), orbPaint)
+                }
+
+                // 1C. Cycle-Hashed Varied Shooting Stars (+ Meteor Shower Peak Boost)
+                if (starFade > 0.45f && weather == SkyWeather.CLEAR) {
+                    val period = if (sky.isMeteorShowerPeak || circ.particleKind == 4) 10.0 else 26.0
+                    val cycle = kotlin.math.floor(timeSec / period).toLong()
+                    val phase = timeSec % period
+                    val dur = 0.65 + ((cycle * 37L) % 3) * 0.12
+                    if (phase < dur) {
+                        val h1 = abs(sin(cycle * 12.9898)).toFloat()
+                        val h2 = abs(sin(cycle * 78.233)).toFloat()
+                        val dir = if (cycle % 2L == 0L) 1f else -1f
+                        val startX = width * (0.18f + 0.64f * h1)
+                        val startY = height * (0.07f + 0.24f * h2)
+                        val prog = (phase / dur).toFloat()
+                        val dxSpan = width * (0.24f + 0.14f * h2) * dir
+                        val dySpan = height * (0.10f + 0.08f * h1)
+                        val sx = startX + dxSpan * prog
+                        val sy = startY + dySpan * prog
+                        val tail = 0.18f * (1f - prog * 0.4f)
+                        val ex = sx - dxSpan * tail
+                        val ey = sy - dySpan * tail
+                        val fade = sin(prog * PI).toFloat() * starFade
+                        baselinePaint.strokeWidth = density * 1.35f
+                        baselinePaint.color = Color.WHITE
+                        baselinePaint.alpha = (masterAlpha * 0.80f * fade).toInt().coerceIn(0, 255)
+                        canvas.drawLine(sx, sy, ex, ey, baselinePaint)
+                    }
+                }
+            }
+
+            // 2A. Real Sun (or Solar Eclipse Corona!) with Kasten-Young Air-Mass Color
+            if (sky.sunAltDeg > -3f) {
+                val horizonFade = ((sky.sunAltDeg + 3f) / 3f).coerceIn(0f, 1f)
+                val coronaCol = if (isCharging) 0xFF34D399.toInt() else sky.sunCoronaColor
+                val pulse = if (isCharging) 0.75f + 0.25f * sin(timeSec * 2.2).toFloat() else 1f
+                val glowR = width * 0.16f
+                orbPaint.shader = RadialGradient(
+                    sunX, sunY, glowR,
+                    intArrayOf(
+                        (coronaCol and 0x00FFFFFF) or (((masterAlpha * 0.48f * horizonFade * pulse).toInt()) shl 24),
+                        (coronaCol and 0x00FFFFFF) or (((masterAlpha * 0.14f * horizonFade * pulse).toInt()) shl 24),
+                        Color.TRANSPARENT
+                    ),
+                    null, Shader.TileMode.CLAMP
+                )
+                canvas.drawCircle(sunX, sunY, glowR, orbPaint)
+                orbPaint.shader = null
+
+                orbPaint.color = if (sky.isSolarEclipse) 0xFF05060A.toInt() else sky.sunColor
+                orbPaint.alpha = (masterAlpha * 0.94f * horizonFade).toInt()
+                canvas.drawCircle(sunX, sunY, width * 0.021f, orbPaint)
+            }
+
+            // 2B. Real-Phase Moon with Air-Mass Orange->Silver Color, Bright-Limb Tilt & Daytime Blending
+            if (sky.moonAltDeg > -2f) {
+                val moonHorizonFade = ((sky.moonAltDeg + 2f) / 2.5f).coerceIn(0f, 1f)
+                val dayVisibility = if (isDay) 0.38f else 0.94f
+                val r = width * 0.024f * sky.moonSizeScale
+                val moonGlowR = r * 5.2f
+                val glowCol = if (isCharging && sky.sunAltDeg <= -3f) 0xFF34D399.toInt() else sky.moonCoronaColor
+                orbPaint.shader = RadialGradient(
+                    moonX, moonY, moonGlowR,
+                    intArrayOf(
+                        (glowCol and 0x00FFFFFF) or (((masterAlpha * 0.36f * moonHorizonFade * dayVisibility).toInt()) shl 24),
+                        Color.TRANSPARENT
+                    ),
+                    null, Shader.TileMode.CLAMP
+                )
+                canvas.drawCircle(moonX, moonY, moonGlowR, orbPaint)
+                orbPaint.shader = null
+
+                canvas.save()
+                canvas.translate(moonX, moonY)
+                canvas.rotate(sky.moonLimbTiltDeg)
+
+                if (!isDay) {
+                    orbPaint.color = sky.moonColor
+                    orbPaint.alpha = (masterAlpha * 0.12f * moonHorizonFade).toInt()
+                    canvas.drawCircle(0f, 0f, r, orbPaint)
+                }
+
+                val k = sky.moonIllumination.coerceIn(0.02f, 1f)
+                val termRx = r * kotlin.math.abs(2f * k - 1f)
+                moonPath.reset()
+                arcRect.set(-r, -r, r, r)
+                moonPath.arcTo(arcRect, -90f, 180f, true)
+                arcRect.set(-termRx, -r, termRx, r)
+                if (k >= 0.5f) {
+                    moonPath.arcTo(arcRect, 90f, 180f, false)
+                } else {
+                    moonPath.arcTo(arcRect, 90f, -180f, false)
+                }
+                moonPath.close()
+
+                orbPaint.color = sky.moonColor
+                orbPaint.alpha = (masterAlpha * dayVisibility * moonHorizonFade).toInt()
+                canvas.drawPath(moonPath, orbPaint)
+                canvas.restore()
+            }
+
+            // 3. Sunlit Wind-Driven Clouds + Crepuscular Sunbeams + 4-Gull Thermal Flock
             if (isDay) {
+                val windFactor = (0.75f + weatherState.windKmh / 24f).coerceIn(0.65f, 1.85f)
+                val cloudScale = (0.35f + (weatherState.cloudCoverPct / 100f) * 0.95f).coerceIn(0.30f, 1.30f)
                 val cloudTint = ColorUtils.blendARGB(Color.WHITE, circ.horizonColor, 0.22f) and 0x00FFFFFF
+                val sunRimRgb = sky.sunColor and 0x00FFFFFF
+                var nearSunBeam = 0f
+
                 for (c in 0 until 3) {
-                    val speed = 0.0062f + c * 0.0016f
+                    val speed = (0.0062f + c * 0.0016f) * windFactor
                     val cx = (((0.18f + c * 0.36f + (timeSec * speed).toFloat()) % 1.48f) - 0.24f) * width
                     val cy = height * (0.26f + c * 0.11f)
-                    val baseAlpha = (masterAlpha * (0.24f - c * 0.04f)).toInt().coerceIn(0, 255)
+                    val baseAlpha = (masterAlpha * (0.24f - c * 0.04f) * cloudScale).toInt().coerceIn(0, 255)
                     val col = cloudTint or (baseAlpha shl 24)
                     drawSoftOval(cx, cy, width * 0.30f, height * 0.032f, col)
                     drawSoftOval(cx - width * 0.10f, cy - height * 0.010f, width * 0.18f, height * 0.024f, col)
                     drawSoftOval(cx + width * 0.11f, cy + height * 0.006f, width * 0.20f, height * 0.022f, col)
+
+                    // Sunlit rim highlight on the Sun-facing side of each cloud
+                    val sunDir = if (sunX >= cx) 1f else -1f
+                    val rimAlpha = (masterAlpha * 0.12f * cloudScale).toInt().coerceIn(0, 255)
+                    drawSoftOval(cx + sunDir * width * 0.08f, cy - height * 0.004f, width * 0.16f, height * 0.018f, sunRimRgb or (rimAlpha shl 24))
+
+                    val dSun = kotlin.math.abs(cx - sunX) / (width * 0.30f)
+                    if (dSun < 1f) {
+                        nearSunBeam = maxOf(nearSunBeam, 1f - dSun)
+                    }
                 }
 
-                // 2 tiny distant V-gulls gliding calmly across the upper sky
+                // Crepuscular Sunbeams when a cloud drifts near the Sun
+                if (nearSunBeam > 0.05f && sky.sunAltDeg > 4f) {
+                    baselinePaint.strokeWidth = width * 0.045f
+                    baselinePaint.color = sky.sunColor
+                    baselinePaint.alpha = (masterAlpha * 0.055f * nearSunBeam).toInt().coerceIn(0, 255)
+                    for (ray in -1..1) {
+                        val endX = sunX + ray * width * 0.18f + (sunX - width * 0.5f) * 0.15f
+                        canvas.drawLine(sunX, sunY, endX, horizonY, baselinePaint)
+                    }
+                }
+
+                // 4-Gull distant thermal-soaring V-flock
                 baselinePaint.strokeWidth = density * 1.15f
                 baselinePaint.color = 0xFF1E293B.toInt()
-                for (g in 0 until 2) {
-                    val gx = (((0.25f + g * 0.11f + (timeSec * 0.016).toFloat()) % 1.24f) - 0.12f) * width
-                    val gy = height * (0.31f + g * 0.026f) - sin(timeSec * 0.8 + g).toFloat() * (height * 0.008f)
-                    val span = width * (0.015f - g * 0.003f)
-                    val flap = sin(timeSec * 2.8 + g * 1.4).toFloat() * (span * 0.38f)
-                    baselinePaint.alpha = (masterAlpha * 0.40f).toInt()
+                for (g in 0 until 4) {
+                    val offsetX = g * 0.055f
+                    val offsetY = (g % 2) * 0.018f + (g / 2) * 0.024f
+                    val gx = (((0.22f + offsetX + (timeSec * 0.016).toFloat()) % 1.28f) - 0.14f) * width
+                    val gy = height * (0.29f + offsetY) - sin(timeSec * 0.8 + g * 0.9).toFloat() * (height * 0.007f)
+                    val span = width * (0.014f - g * 0.0018f)
+                    val flap = sin(timeSec * 2.8 + g * 1.3).toFloat() * (span * 0.38f)
+                    baselinePaint.alpha = (masterAlpha * (0.42f - g * 0.05f)).toInt()
                     canvas.drawLine(gx - span, gy - flap, gx, gy + span * 0.22f, baselinePaint)
                     canvas.drawLine(gx, gy + span * 0.22f, gx + span, gy - flap, baselinePaint)
                 }
             }
 
-            // 3B. Golden-Hour Horizon Scatter (-6°..+8° Sun Altitude) & Weather Atmosphere
+            // 3B. Golden-Hour Horizon Scatter (-6°..+8°) & Weather Rain / Lightning
             if (sky.sunAltDeg in -6f..8f) {
                 val ghStrength = (1f - kotlin.math.abs(sky.sunAltDeg - 1f) / 7f).coerceIn(0f, 1f)
                 val ghAlpha = (masterAlpha * 0.28f * ghStrength).toInt().coerceIn(0, 255)
@@ -1042,7 +1104,7 @@ class BeatWallService : WallpaperService() {
 
             canvas.restore()
 
-            // Sea Raindrop Ripples during Rain/Thunderstorm
+            // Sea Raindrop Ripples
             if (weather == SkyWeather.RAIN || weather == SkyWeather.THUNDERSTORM) {
                 baselinePaint.strokeWidth = density * 0.8f
                 baselinePaint.color = 0xFFBAE6FD.toInt()
@@ -1057,27 +1119,31 @@ class BeatWallService : WallpaperService() {
                 }
             }
 
-            // 4. Clean Horizon Line + Continuous Shimmering Sun/Moon Water Reflection Column
-            baselinePaint.strokeWidth = density * 0.85f
+            // 4. Horizon Mirage & Haze Band + Wind-Modulated Sun/Moon Water Reflection Column
+            val mirageRgb = (if (isDay) circ.horizonColor else 0xFF334155.toInt()) and 0x00FFFFFF
+            val mirageAlpha = (masterAlpha * (if (isDay) 0.22f else 0.10f)).toInt().coerceIn(0, 255)
+            drawSoftOval(width * 0.5f, horizonY, width * 0.88f, height * 0.018f, mirageRgb or (mirageAlpha shl 24))
+
+            baselinePaint.strokeWidth = density * 0.75f
             baselinePaint.color = Color.WHITE
-            baselinePaint.alpha = (masterAlpha * (if (isDay) 0.22f else 0.12f)).toInt()
+            baselinePaint.alpha = (masterAlpha * (if (isDay) 0.16f else 0.10f)).toInt()
             canvas.drawLine(0f, horizonY, width.toFloat(), horizonY, baselinePaint)
 
             val seaMidY = horizonY + (shoreY - horizonY) * 0.42f
             val seaSpanY = (shoreY - horizonY) * 0.52f
-            val shimRgb = if (sky.sunAltDeg > -4f) (sky.sunColor and 0x00FFFFFF) else (circ.accent and 0x00FFFFFF)
+            val shimRgb = if (sky.sunAltDeg > -4f) (sky.sunColor and 0x00FFFFFF) else (sky.moonColor and 0x00FFFFFF)
+            val windScale = (0.75f + (weatherState.windKmh / 28f)).coerceIn(0.75f, 1.8f)
             val shimBreath = 0.88f + 0.12f * sin(timeSec * 0.9).toFloat()
-            val shimAlpha = (masterAlpha * (if (isDay) 0.22f else 0.14f) * shimBreath).toInt().coerceIn(0, 255)
-            drawSoftOval(orbX, seaMidY, width * 0.15f, seaSpanY, shimRgb or (shimAlpha shl 24))
-            // Soft horizontal water glints inside reflection column (feathered, never sticks)
+            val shimAlpha = (masterAlpha * (if (isDay) 0.22f else 0.16f) * shimBreath).toInt().coerceIn(0, 255)
+            drawSoftOval(orbX, seaMidY, width * 0.13f * windScale, seaSpanY, shimRgb or (shimAlpha shl 24))
             for (r in 0 until 3) {
                 val ry = horizonY + (shoreY - horizonY) * (0.14f + r * 0.22f)
                 val rxShift = sin(timeSec * 0.7 + r * 1.5).toFloat() * (width * 0.025f)
                 val rAlpha = (masterAlpha * (0.12f - r * 0.02f)).toInt().coerceIn(0, 255)
-                drawSoftOval(orbX + rxShift, ry, width * (0.11f + r * 0.03f), height * 0.005f, shimRgb or (rAlpha shl 24))
+                drawSoftOval(orbX + rxShift, ry, width * (0.10f + r * 0.03f) * windScale, height * 0.005f, shimRgb or (rAlpha shl 24))
             }
 
-            // 5. Tiny Distant Sailboat Silhouette Drifting Slowly on the Sea
+            // 5. Tiny Distant Sailboat
             val boatX = (((0.20f + (timeSec * 0.0060).toFloat()) % 1.16f) - 0.08f) * width
             val boatBob = sin(timeSec * 1.5).toFloat() * (density * 1.8f)
             val boatY = horizonY + height * 0.013f + boatBob
@@ -1095,7 +1161,7 @@ class BeatWallService : WallpaperService() {
             moonPath.close()
             canvas.drawPath(moonPath, eqBarPaint)
 
-            // 6. Calm, Noticeable Ocean Swells (~16.5s per swell: soft glow band + delicate translucent foam crest)
+            // 6. Calm, Noticeable Ocean Swells (~16.5s per swell)
             val swellRgb = if (isDay) 0x00E0F2FE else 0x0022D3EE
             val steps = 28
             for (wIdx in 0 until 2) {

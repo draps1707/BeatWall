@@ -15,6 +15,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -37,6 +38,7 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
     private lateinit var txtLocationCity: TextView
     private lateinit var txtSkyMetrics: TextView
     private lateinit var edtCityInput: EditText
+    private lateinit var seekTimeTravel: SeekBar
     private lateinit var btnSetWallpaper: Button
 
     private val locationPermLauncher = registerForActivityResult(
@@ -63,6 +65,7 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
         txtLocationCity = findViewById(R.id.txtLocationCity)
         txtSkyMetrics = findViewById(R.id.txtSkyMetrics)
         edtCityInput = findViewById(R.id.edtCityInput)
+        seekTimeTravel = findViewById(R.id.seekTimeTravel)
         btnSetWallpaper = findViewById(R.id.btnSetWallpaper)
 
         findViewById<Button>(R.id.btnNotifAccess).setOnClickListener {
@@ -89,11 +92,24 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
             }
         }
 
-        findViewById<Button>(R.id.btnPrevLive).setOnClickListener { setPreviewHour(-1, "Live Sky") }
-        findViewById<Button>(R.id.btnPrevDawn).setOnClickListener { setPreviewHour(6, "Dawn (6 AM)") }
-        findViewById<Button>(R.id.btnPrevNoon).setOnClickListener { setPreviewHour(13, "Noon (1 PM)") }
-        findViewById<Button>(R.id.btnPrevSunset).setOnClickListener { setPreviewHour(17, "Sunset (5 PM)") }
-        findViewById<Button>(R.id.btnPrevNight).setOnClickListener { setPreviewHour(22, "Night (10 PM)") }
+        seekTimeTravel.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    LocationStore.setPreviewMinute(this@MainActivity, progress)
+                    refreshSkyCard()
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        findViewById<Button>(R.id.btnPrevLive).setOnClickListener {
+            LocationStore.setPreviewMinute(this, -1)
+            val cal = Calendar.getInstance()
+            seekTimeTravel.progress = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+            refreshSkyCard()
+            Toast.makeText(this, "Live sky restored", Toast.LENGTH_SHORT).show()
+        }
 
         btnSetWallpaper.setOnClickListener {
             val intent = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
@@ -106,15 +122,16 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
         }
     }
 
-    private fun setPreviewHour(hour: Int, label: String) {
-        LocationStore.setPreviewHour(this, hour)
-        refreshSkyCard()
-        Toast.makeText(this, "Wallpaper preview: $label", Toast.LENGTH_SHORT).show()
-    }
-
     override fun onResume() {
         super.onResume()
         MediaSessionTracker.getInstance(applicationContext).addListener(this)
+        val prevMin = LocationStore.getPreviewMinute(this)
+        if (prevMin >= 0) {
+            seekTimeTravel.progress = prevMin
+        } else {
+            val cal = Calendar.getInstance()
+            seekTimeTravel.progress = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+        }
         refreshUi()
         refreshSkyCard()
     }
@@ -125,7 +142,7 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
     }
 
     override fun onDestroy() {
-        LocationStore.setPreviewHour(this, -1)
+        LocationStore.setPreviewMinute(this, -1)
         super.onDestroy()
     }
 
@@ -151,24 +168,29 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
 
     private fun refreshSkyCard() {
         val loc = LocationStore.load(this)
-        val prevHour = LocationStore.getPreviewHour(this)
-        val targetMs = if (prevHour >= 0) {
+        val prevMin = LocationStore.getPreviewMinute(this)
+        val targetMs = if (prevMin >= 0) {
             Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, prevHour)
-                set(Calendar.MINUTE, 15)
+                set(Calendar.HOUR_OF_DAY, prevMin / 60)
+                set(Calendar.MINUTE, prevMin % 60)
             }.timeInMillis
         } else {
             System.currentTimeMillis()
         }
         val snap = SkyAstronomy.compute(targetMs, loc.lat, loc.lon)
         val weather = WeatherClient.getCachedOrRefresh(this, loc.lat, loc.lon)
-        txtLocationCity.text = if (prevHour >= 0) "${loc.cityName} (Preview ${prevHour}:15)" else loc.cityName
+        txtLocationCity.text = if (prevMin >= 0) {
+            val tStr = SkyAstronomy.formatDecimalHour(prevMin / 60.0)
+            "${loc.cityName} (Preview $tStr)"
+        } else {
+            loc.cityName
+        }
         val rise = SkyAstronomy.formatDecimalHour(snap.sunriseLocalHours)
         val set = SkyAstronomy.formatDecimalHour(snap.sunsetLocalHours)
         val moonPct = (snap.moonIllumination * 100f).roundToInt()
         val sunAlt = snap.sunAltDeg.roundToInt()
-        val wTag = weather.name.lowercase().replaceFirstChar { it.uppercase() }
-        txtSkyMetrics.text = "$wTag • Sun $sunAlt° • Rise $rise • Set $set • Moon $moonPct%"
+        val wTag = weather.sky.name.lowercase().replaceFirstChar { it.uppercase() }
+        txtSkyMetrics.text = "$wTag (${weather.windKmh.roundToInt()} km/h) • Sun $sunAlt° • Rise $rise • Set $set • Moon $moonPct%"
     }
 
     @Suppress("MissingPermission")
