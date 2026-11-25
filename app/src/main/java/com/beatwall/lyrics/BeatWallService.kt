@@ -557,7 +557,7 @@ class BeatWallService : WallpaperService() {
                 // Silky critically-damped spring (~380ms glide)
                 val diff = targetY - springY
                 if (abs(diff) > 0.30f || abs(springVelocity) > 0.8f) {
-                    val omega = 10.5f
+                    val omega = 9.5f
                     val accel = omega * omega * diff - 2f * omega * springVelocity
                     springVelocity += accel * dtSec
                     springY += springVelocity * dtSec
@@ -1019,7 +1019,8 @@ class BeatWallService : WallpaperService() {
             val start = (activeIdx - 3).coerceAtLeast(0)
             val end = (activeIdx + 3).coerceAtMost(maxIdx)
             val timeSec = frameTimeNanos / 1_000_000_000.0
-            val mistZone = (clipBottom - clipTop) * 0.10f
+            val clipH = (clipBottom - clipTop).coerceAtLeast(1f)
+            val mistZone = clipH * 0.14f
             val posMs = state.currentPositionMs()
             val isPlaying = state.isPlaying && !isLowBattery
 
@@ -1028,18 +1029,20 @@ class BeatWallService : WallpaperService() {
                 val dist = abs(i - activeIdx)
                 val focusW = if (isCurrentState && i in focusWeights.indices) focusWeights[i] else if (i == activeIdx) 1f else 0f
 
-                // Subtle Apple Music-style staggered cascade inertia
+                // Subtle Apple Music-style staggered cascade inertia + Silk Diagonal Glide (bottom-left -> center -> top-right)
                 val stagger = if (isCurrentState) {
                     (i - activeIdx) * (-springVelocity * 0.014f).coerceIn(-height * 0.012f, height * 0.012f)
                 } else 0f
                 val lineOffset = yCenters[i] - scrollY + stagger
                 val yPos = centerY + lineOffset - (layout.height / 2f)
-                val lineCenterY = yPos + layout.height / 2f
 
-                val topFade = ((lineCenterY - clipTop) / mistZone).coerceIn(0f, 1f)
-                val botFade = ((clipBottom - lineCenterY) / mistZone).coerceIn(0f, 1f)
+                val topFade = ((yPos - clipTop) / mistZone).coerceIn(0f, 1f)
+                val botFade = ((clipBottom - (yPos + layout.height)) / mistZone).coerceIn(0f, 1f)
                 val mistFactor = minOf(topFade, botFade)
                 if (mistFactor <= 0.02f) continue
+
+                val relY = (lineOffset / (clipH * 0.5f)).coerceIn(-1.2f, 1.2f)
+                val dx = -relY * (width * 0.085f)
 
                 val baseDistAlpha = when (dist) {
                     0 -> 1.0f
@@ -1054,9 +1057,15 @@ class BeatWallService : WallpaperService() {
                 if (lineAlpha <= 2) continue
 
                 canvas.save()
-                canvas.translate(centerX, yPos)
+                canvas.translate(centerX + dx, yPos)
 
-                val scale = 0.94f + 0.10f * focusW
+                val depthScale = when (dist) {
+                    0 -> 1.05f
+                    1 -> 0.95f
+                    2 -> 0.87f
+                    else -> 0.80f
+                }
+                val scale = depthScale + (1.05f - depthScale) * focusW
                 val pivotX = layout.width / 2f
                 canvas.scale(scale, scale, pivotX, layout.height / 2f)
 
