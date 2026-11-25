@@ -713,7 +713,7 @@ class BeatWallService : WallpaperService() {
                     // Critically-damped 120Hz glide (~420ms)
                     val diff = targetY - springY
                     if (abs(diff) > 0.25f || abs(springVelocity) > 0.6f) {
-                        val omega = 9.5f
+                        val omega = 11.5f
                         val accel = omega * omega * diff - 2f * omega * springVelocity
                         springVelocity += accel * dtSec
                         springY += springVelocity * dtSec
@@ -1755,7 +1755,7 @@ class BeatWallService : WallpaperService() {
                 // Continuous distance in line-spacing units (0.0 at center, 1.0 at ±1 line, 2.0 at ±2, etc.)
                 val stepDist = abs(lineOffset) / lineStepPx.coerceAtLeast(1f)
                 val focusStrength = 1f - smoothstep((stepDist / 0.65f).coerceIn(0f, 1f))
-                val distFade = (1f / (1f + 1.15f * stepDist * stepDist)).coerceIn(0.05f, 1.0f)
+                val distFade = (1f / (1f + 1.45f * stepDist * stepDist)).coerceIn(0.05f, 1.0f)
                 val pausedScale = if (isPlaying) 1.0f else 0.72f
                 val lineAlpha = (masterAlpha * distFade * mistFactor * pausedScale).toInt().coerceIn(0, 255)
                 if (lineAlpha <= 2) continue
@@ -1820,10 +1820,10 @@ class BeatWallService : WallpaperService() {
                     val lineStart = state.lyrics[i].timeMs
                     val nextStart = if (i + 1 < state.lyrics.size) state.lyrics[i + 1].timeMs else lineStart + 3500L
                     val lineDur = (nextStart - lineStart).coerceIn(750L, 5000L)
-                    val totalSweepFrac = if (i == approxIdx) {
-                        ((posMs - lineStart).toFloat() / (lineDur * 0.90f)).coerceIn(0.03f, 1.0f)
-                    } else {
-                        1.0f
+                    val totalSweepFrac = when {
+                        i < approxIdx -> 1.0f
+                        i == approxIdx -> ((posMs - lineStart).toFloat() / (lineDur * 0.96f)).coerceIn(0.0f, 1.0f)
+                        else -> 0.0f
                     }
 
                     val lineCount = layout.lineCount.coerceAtLeast(1)
@@ -1835,7 +1835,7 @@ class BeatWallService : WallpaperService() {
                     val sungTargetW = totalW * totalSweepFrac
 
                     val brightTint = sungRgb or (lineAlpha shl 24)
-                    val dimAlphaTint = dimRgb or (((lineAlpha * 0.50f).toInt()) shl 24)
+                    val dimAlphaTint = dimRgb or (((lineAlpha * 0.42f).toInt()) shl 24)
                     val sweepKey = (brightTint.toLong() shl 32) or (dimAlphaTint.toLong() and 0xFFFFFFFFL)
                     val baseSweepShader = if (cachedSweepKey == sweepKey && cachedSweepShader != null) {
                         cachedSweepShader!!
@@ -1856,22 +1856,26 @@ class BeatWallService : WallpaperService() {
                         val localFrac = ((sungTargetW - consumedW) / lw).coerceIn(0f, 1f)
                         consumedW += lw
 
-                        val lTop = layout.getLineTop(l).toFloat() - 16f
-                        val lBot = layout.getLineBottom(l).toFloat() + 16f
-                        val leftEdge = (layout.width - lw) / 2f
+                        val lTop = if (l == 0) layout.getLineTop(0).toFloat() - 24f else {
+                            (layout.getLineBottom(l - 1) + layout.getLineTop(l)) * 0.5f
+                        }
+                        val lBot = if (l == lineCount - 1) layout.getLineBottom(l).toFloat() + 24f else {
+                            (layout.getLineBottom(l) + layout.getLineTop(l + 1)) * 0.5f
+                        }
+                        val leftEdge = layout.getLineLeft(l)
 
                         canvas.save()
                         canvas.clipRect(-24f, lTop, layout.width + 24f, lBot)
 
                         if (localFrac <= 0.005f) {
                             layout.paint.shader = null
-                            layout.paint.color = dimRgb or (((lineAlpha * 0.50f).toInt()) shl 24)
+                            layout.paint.color = dimAlphaTint
                         } else if (localFrac >= 0.995f) {
                             layout.paint.shader = null
                             layout.paint.color = brightTint
                         } else {
                             val sweepX = leftEdge + lw * localFrac
-                            val softEdge = (lw * 0.16f).coerceAtLeast(22f)
+                            val softEdge = (lw * 0.14f).coerceAtLeast(18f)
                             shaderMatrix.reset()
                             shaderMatrix.setScale(softEdge, 1f)
                             shaderMatrix.postTranslate(sweepX, 0f)
