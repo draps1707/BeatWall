@@ -2,225 +2,194 @@ package com.beatwall.lyrics
 
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RadialGradient
+import android.graphics.RectF
 import android.graphics.Shader
-import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
-import kotlin.random.Random
 
-data class AnimationDna(
-    val archetype: Int,
-    val colorMode: Int,
-    val tempoIdx: Int,
-    val densityIdx: Int,
-    val direction: Int
-)
-
+/**
+ * Deterministic, zero-allocation quasi-periodic physics engine (1 : sqrt(2) : phi)
+ * for 120 Hz music & focus backdrops. Replaces dice-roll randomization with
+ * song-seeded orbital phase, cover-art mood regimes, and momentum/friction damping.
+ */
 class ProceduralAnimator {
 
-    private var dna = rollRandom(-1, calmOnly = false)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG)
+    private val shaderMatrix = Matrix()
+    private val ovalRect = RectF()
 
-    fun reroll(calmOnly: Boolean = false) {
-        dna = rollRandom(dna.archetype, calmOnly)
+    // Cached 2-slot RadialGradient pool for 0-byte/frame 120 Hz rendering
+    private var cachedColA = 0
+    private var cachedShaderA: RadialGradient? = null
+    private var cachedColB = 0
+    private var cachedShaderB: RadialGradient? = null
+
+    // Continuous momentum/friction phase integrator (never jumps on song skip or pause)
+    private var phaseRad = 0.0
+    private var omega = 0.0
+    private var theta0 = 0.42
+    private var phi0 = 1.17
+
+    fun setTrackSeed(trackKey: String?) {
+        val h = (trackKey ?: "beatwall").hashCode()
+        val u1 = ((h and 0xFFFF) / 65535.0) * 6.283185307179586
+        val u2 = (((h ushr 16) and 0xFFFF) / 65535.0) * 6.283185307179586
+        theta0 = u1
+        phi0 = u2
     }
 
-    private fun rollRandom(avoidArchetype: Int, calmOnly: Boolean): AnimationDna {
-        var arch = Random.nextInt(6)
-        if (arch == avoidArchetype) {
-            arch = (arch + 1 + Random.nextInt(5)) % 6
+    fun stepPhysics(dtSec: Float, targetOmega: Double) {
+        val dt = dtSec.coerceIn(0.001f, 0.05f).toDouble()
+        // Smooth exponential momentum/friction ramp (coasts gently to rest on pause)
+        val tau = if (targetOmega > omega) 0.45 else 0.65
+        val blend = 1.0 - kotlin.math.exp(-dt / tau)
+        omega += (targetOmega - omega) * blend
+        if (abs(omega) < 0.0005 && targetOmega == 0.0) {
+            omega = 0.0
         }
-        return AnimationDna(
-            archetype = arch,
-            colorMode = Random.nextInt(4),
-            tempoIdx = if (calmOnly) 0 else Random.nextInt(3),
-            densityIdx = Random.nextInt(3),
-            direction = if (Random.nextBoolean()) 1 else -1
-        )
+        phaseRad += omega * dt
     }
+
+    fun isCoasting(): Boolean = omega > 0.002
 
     fun draw(
         canvas: Canvas,
         width: Int,
         height: Int,
-        timeSec: Double,
         accent: Int,
         primary: Int,
         secondary: Int,
+        regime: Int,
         masterAlpha: Int
     ) {
-        val tempo = when (dna.tempoIdx) {
-            0 -> 0.55
-            1 -> 0.85
-            else -> 1.15
-        }
-        val t = timeSec * tempo * dna.direction
-        val densityScale = when (dna.densityIdx) {
-            0 -> 0.8f
-            1 -> 1.0f
-            else -> 1.25f
-        }
+        if (masterAlpha <= 2 || width <= 0 || height <= 0) return
+        val t = phaseRad
 
-        val c1 = pickColor1(accent, primary, t)
-        val c2 = pickColor2(accent, primary, secondary)
-
-        when (dna.archetype) {
-            0 -> drawAuroraClouds(canvas, width, height, t, c1, c2, masterAlpha)
-            1 -> drawLavaLampBlobs(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
-            2 -> drawBokehLightPools(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
-            3 -> drawDiagonalGodRays(canvas, width, height, t, c1, c2, densityScale, masterAlpha)
-            4 -> drawOrbitingNebulas(canvas, width, height, t, c1, c2, masterAlpha)
-            5 -> drawSoftEdgeNebula(canvas, width, height, t, c1, c2, masterAlpha)
+        when (regime.coerceIn(0, 2)) {
+            0 -> drawDeepBreathingHalo(canvas, width, height, t, primary, secondary, masterAlpha)
+            1 -> drawAuroraSilkDrift(canvas, width, height, t, accent, primary, masterAlpha)
+            else -> drawBinaryOrbitalNebula(canvas, width, height, t, accent, primary, masterAlpha)
         }
         paint.shader = null
     }
 
-    private fun pickColor1(accent: Int, primary: Int, t: Double): Int {
-        return when (dna.colorMode) {
-            0 -> accent
-            1 -> primary
-            2 -> accent
-            else -> if (sin(t * 0.35) > 0) accent else primary
-        }
-    }
-
-    private fun pickColor2(accent: Int, primary: Int, secondary: Int): Int {
-        return when (dna.colorMode) {
-            0 -> primary
-            1 -> secondary
-            2 -> Color.WHITE
-            else -> secondary
-        }
-    }
-
-    private fun drawAuroraClouds(canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, alpha: Int) {
-        val cx1 = w * 0.45f + sin(t * 0.42).toFloat() * (w * 0.24f)
-        val cy1 = h * 0.44f + cos(t * 0.32).toFloat() * (h * 0.12f)
-        val r1 = w * 0.82f
-        paint.shader = RadialGradient(
-            cx1, cy1, r1,
-            intArrayOf((c1 and 0x00FFFFFF) or (((alpha * 0.34f).toInt()) shl 24), Color.TRANSPARENT),
-            null, Shader.TileMode.CLAMP
-        )
-        canvas.drawCircle(cx1, cy1, r1, paint)
-
-        val cx2 = w * 0.55f - sin(t * 0.36).toFloat() * (w * 0.22f)
-        val cy2 = h * 0.62f - cos(t * 0.28).toFloat() * (h * 0.10f)
-        val r2 = w * 0.72f
-        paint.shader = RadialGradient(
-            cx2, cy2, r2,
-            intArrayOf((c2 and 0x00FFFFFF) or (((alpha * 0.26f).toInt()) shl 24), Color.TRANSPARENT),
-            null, Shader.TileMode.CLAMP
-        )
-        canvas.drawCircle(cx2, cy2, r2, paint)
-    }
-
-    private fun drawLavaLampBlobs(
-        canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
+    // Regime 0: Moody / Monochrome — minimal OLED-clean breathing halo
+    private fun drawDeepBreathingHalo(
+        canvas: Canvas,
+        w: Int,
+        h: Int,
+        t: Double,
+        primary: Int,
+        secondary: Int,
+        alpha: Int
     ) {
-        val count = (4 * density).toInt().coerceIn(3, 5)
-        for (i in 0 until count) {
-            val cx = w * (0.22f + (i * 0.56f / (count - 1).coerceAtLeast(1))) +
-                sin(t * (0.5 + i * 0.12) + i * 1.3).toFloat() * (w * 0.10f)
-            val cy = h * 0.50f + cos(t * (0.4 + i * 0.11) + i * 0.9).toFloat() * (h * 0.22f)
-            val r = w * (0.28f + (i % 2) * 0.10f)
-            val col = if (i % 2 == 0) c1 else c2
-            paint.shader = RadialGradient(
-                cx, cy, r,
-                intArrayOf(
-                    (col and 0x00FFFFFF) or (((alpha * 0.30f).toInt()) shl 24),
-                    (col and 0x00FFFFFF) or (((alpha * 0.10f).toInt()) shl 24),
-                    Color.TRANSPARENT
-                ),
-                null, Shader.TileMode.CLAMP
-            )
-            canvas.drawCircle(cx, cy, r, paint)
-        }
+        val breath = 1.0f + 0.09f * sin(t * 0.55 + theta0).toFloat()
+        val cx = w * 0.50f + sin(t * 0.31 + phi0).toFloat() * (w * 0.06f)
+        val cy = h * 0.48f + cos(t * 0.31 * 1.4142 + theta0).toFloat() * (h * 0.05f)
+        val a1 = (alpha * 0.28f).toInt().coerceIn(0, 255)
+        val a2 = (alpha * 0.16f).toInt().coerceIn(0, 255)
+        drawCachedGlow(canvas, 0, cx, cy, w * 0.68f * breath, h * 0.46f * breath, (primary and 0x00FFFFFF) or (a1 shl 24))
+        drawCachedGlow(canvas, 1, w * 0.50f, h * 0.60f, w * 0.72f, h * 0.42f, (secondary and 0x00FFFFFF) or (a2 shl 24))
     }
 
-    private fun drawBokehLightPools(
-        canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
+    // Regime 1: Warm / Acoustic — slow horizontal aurora wave-bands
+    private fun drawAuroraSilkDrift(
+        canvas: Canvas,
+        w: Int,
+        h: Int,
+        t: Double,
+        accent: Int,
+        primary: Int,
+        alpha: Int
     ) {
-        val count = (5 * density).toInt().coerceIn(4, 7)
-        for (i in 0 until count) {
-            val prog = (((t * (0.045 + i * 0.011)) + i * 0.19) % 1.0 + 1.0) % 1.0
-            val cy = h * (0.80f - prog.toFloat() * 0.64f)
-            val cx = w * (0.14f + (i * 0.72f / count)) + sin(t * 0.7 + i).toFloat() * (w * 0.06f)
-            val r = w * (0.14f + (i % 3) * 0.045f)
-            val col = if (i % 2 == 0) c1 else c2
-            paint.shader = RadialGradient(
-                cx, cy, r,
-                intArrayOf((col and 0x00FFFFFF) or (((alpha * 0.28f).toInt()) shl 24), Color.TRANSPARENT),
-                null, Shader.TileMode.CLAMP
-            )
-            canvas.drawCircle(cx, cy, r, paint)
-        }
+        val cx1 = w * 0.48f + sin(t * 0.42 + theta0).toFloat() * (w * 0.22f)
+        val cy1 = h * 0.43f + cos(t * 0.42 * 1.4142 + phi0).toFloat() * (h * 0.09f)
+        val cx2 = w * 0.52f - sin(t * 0.42 * 1.6180 + phi0).toFloat() * (w * 0.20f)
+        val cy2 = h * 0.62f + cos(t * 0.34 + theta0).toFloat() * (h * 0.08f)
+
+        val a1 = (alpha * 0.30f).toInt().coerceIn(0, 255)
+        val a2 = (alpha * 0.24f).toInt().coerceIn(0, 255)
+        drawCachedGlow(canvas, 0, cx1, cy1, w * 0.85f, h * 0.34f, (primary and 0x00FFFFFF) or (a1 shl 24))
+        drawCachedGlow(canvas, 1, cx2, cy2, w * 0.78f, h * 0.32f, (accent and 0x00FFFFFF) or (a2 shl 24))
     }
 
-    private fun drawDiagonalGodRays(
-        canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
+    // Regime 2: Vibrant / Cool — quasi-periodic 1 : sqrt(2) : phi coupled binary orbital nebula
+    private fun drawBinaryOrbitalNebula(
+        canvas: Canvas,
+        w: Int,
+        h: Int,
+        t: Double,
+        accent: Int,
+        primary: Int,
+        alpha: Int
     ) {
-        // Soft radial light plumes along a gentle diagonal axis (zero rectangular clipping)
-        val count = (3 * density).toInt().coerceIn(3, 5)
-        for (i in 0 until count) {
-            val frac = i.toFloat() / (count - 1).coerceAtLeast(1)
-            val cx = w * (0.22f + frac * 0.56f) + sin(t * 0.42 + i * 1.2).toFloat() * (w * 0.08f)
-            val cy = h * (0.28f + frac * 0.44f) + cos(t * 0.35 + i * 0.9).toFloat() * (h * 0.06f)
-            val r = w * (0.48f + (i % 2) * 0.10f)
-            val col = if (i % 2 == 0) c1 else c2
-            val pulse = 0.60f + 0.40f * ((sin(t * 0.75 + i) + 1.0) * 0.5).toFloat()
-            paint.shader = RadialGradient(
-                cx, cy, r,
-                intArrayOf(
-                    (col and 0x00FFFFFF) or (((alpha * 0.28f * pulse).toInt()) shl 24),
-                    (col and 0x00FFFFFF) or (((alpha * 0.09f * pulse).toInt()) shl 24),
-                    Color.TRANSPARENT
-                ),
-                null, Shader.TileMode.CLAMP
-            )
-            canvas.drawCircle(cx, cy, r, paint)
-        }
+        // Primary center follows irrational 1 : 1.618 : 1.414 Lissajous drift
+        val px = w * 0.50f +
+            sin(t * 0.38 + theta0).toFloat() * (w * 0.16f) +
+            sin(t * 0.38 * 1.6180 + phi0).toFloat() * (w * 0.07f)
+        val py = h * 0.48f +
+            cos(t * 0.38 * 1.4142 + phi0).toFloat() * (h * 0.12f)
+
+        // Secondary accent orbits around primary on an elliptical Keplerian path
+        val orbitAng = t * 0.54 + theta0 * 0.5
+        val ax = px + cos(orbitAng).toFloat() * (w * 0.22f)
+        val ay = py + sin(orbitAng).toFloat() * (h * 0.14f)
+
+        val breath = 1.0f + 0.08f * sin(t * 0.62 * 1.6180).toFloat()
+        val a1 = (alpha * 0.32f).toInt().coerceIn(0, 255)
+        val a2 = (alpha * 0.25f).toInt().coerceIn(0, 255)
+        drawCachedGlow(canvas, 0, px, py, w * 0.76f * breath, h * 0.46f * breath, (primary and 0x00FFFFFF) or (a1 shl 24))
+        drawCachedGlow(canvas, 1, ax, ay, w * 0.64f, h * 0.40f, (accent and 0x00FFFFFF) or (a2 shl 24))
     }
 
-    private fun drawOrbitingNebulas(canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, alpha: Int) {
-        val cx = w * 0.5f
-        val cy = h * 0.50f
-        val rx = w * 0.34f
-        val ry = h * 0.20f
-        for (m in 0..1) {
-            val ang = t * 0.55 + m * PI
-            val mx = cx + (cos(ang) * rx).toFloat()
-            val my = cy + (sin(ang) * ry).toFloat()
-            val r = w * 0.36f
-            val col = if (m == 0) c1 else c2
-            paint.shader = RadialGradient(
-                mx, my, r,
-                intArrayOf((col and 0x00FFFFFF) or (((alpha * 0.32f).toInt()) shl 24), Color.TRANSPARENT),
-                null, Shader.TileMode.CLAMP
-            )
-            canvas.drawCircle(mx, my, r, paint)
+    private fun drawCachedGlow(
+        canvas: Canvas,
+        slot: Int,
+        cx: Float,
+        cy: Float,
+        rx: Float,
+        ry: Float,
+        colWithAlpha: Int
+    ) {
+        val sh = if (slot == 0) {
+            if (cachedColA == colWithAlpha && cachedShaderA != null) {
+                cachedShaderA!!
+            } else {
+                RadialGradient(
+                    0f, 0f, 1f,
+                    intArrayOf(colWithAlpha, (colWithAlpha and 0x00FFFFFF) or (((Color.alpha(colWithAlpha) * 0.34f).toInt()) shl 24), Color.TRANSPARENT),
+                    floatArrayOf(0f, 0.55f, 1f),
+                    Shader.TileMode.CLAMP
+                ).also {
+                    cachedColA = colWithAlpha
+                    cachedShaderA = it
+                }
+            }
+        } else {
+            if (cachedColB == colWithAlpha && cachedShaderB != null) {
+                cachedShaderB!!
+            } else {
+                RadialGradient(
+                    0f, 0f, 1f,
+                    intArrayOf(colWithAlpha, (colWithAlpha and 0x00FFFFFF) or (((Color.alpha(colWithAlpha) * 0.34f).toInt()) shl 24), Color.TRANSPARENT),
+                    floatArrayOf(0f, 0.55f, 1f),
+                    Shader.TileMode.CLAMP
+                ).also {
+                    cachedColB = colWithAlpha
+                    cachedShaderB = it
+                }
+            }
         }
-    }
-
-    private fun drawSoftEdgeNebula(canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, alpha: Int) {
-        val p1 = 0.55f + 0.45f * ((sin(t * 0.9) + 1.0) * 0.5).toFloat()
-        val p2 = 0.55f + 0.45f * ((cos(t * 0.8) + 1.0) * 0.5).toFloat()
-        val r = w * 0.48f
-
-        paint.shader = RadialGradient(
-            0f, h * 0.42f, r,
-            intArrayOf((c1 and 0x00FFFFFF) or (((alpha * 0.34f * p1).toInt()) shl 24), Color.TRANSPARENT),
-            null, Shader.TileMode.CLAMP
-        )
-        canvas.drawCircle(0f, h * 0.42f, r, paint)
-
-        paint.shader = RadialGradient(
-            w.toFloat(), h * 0.62f, r,
-            intArrayOf((c2 and 0x00FFFFFF) or (((alpha * 0.34f * p2).toInt()) shl 24), Color.TRANSPARENT),
-            null, Shader.TileMode.CLAMP
-        )
-        canvas.drawCircle(w.toFloat(), h * 0.62f, r, paint)
+        shaderMatrix.reset()
+        shaderMatrix.setScale(rx, ry)
+        shaderMatrix.postTranslate(cx, cy)
+        sh.setLocalMatrix(shaderMatrix)
+        paint.shader = sh
+        ovalRect.set(cx - rx, cy - ry, cx + rx, cy + ry)
+        canvas.drawOval(ovalRect, paint)
     }
 }

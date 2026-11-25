@@ -28,7 +28,8 @@ data class ProcessedArt(
     val secondaryGlowColor: Int,
     val lyricAccentColor: Int,
     val moodGlowScale: Float = 1.0f,
-    val moodBreathPeriodSec: Double = 14.0
+    val moodBreathPeriodSec: Double = 14.0,
+    val moodRegime: Int = 2
 )
 
 data class CircadianTheme(
@@ -328,11 +329,11 @@ class ArtEffectProcessor {
         val hue = domHsl?.getOrNull(0) ?: 210f
         val sat = domHsl?.getOrNull(1) ?: 0.35f
         val lum = domHsl?.getOrNull(2) ?: 0.35f
-        val (moodScale, breathSec) = when {
-            sat < 0.18f || lum < 0.18f -> 0.72f to 18.0
-            sat > 0.50f -> 1.12f to 13.0
-            hue <= 55f || hue >= 330f -> 0.92f to 17.0
-            else -> 1.00f to 14.0
+        val (moodScale, breathSec, regime) = when {
+            sat < 0.18f || lum < 0.18f -> Triple(0.72f, 18.0, 0) // Deep Breathing Halo
+            hue <= 55f || hue >= 330f -> Triple(0.92f, 17.0, 1)  // Aurora Silk Drift
+            sat > 0.50f -> Triple(1.12f, 13.0, 2)                // Binary Orbital Nebula
+            else -> Triple(1.00f, 14.0, 2)
         }
 
         return ProcessedArt(
@@ -342,7 +343,8 @@ class ArtEffectProcessor {
             secondaryGlowColor = secondaryGlow,
             lyricAccentColor = accentGlow,
             moodGlowScale = moodScale,
-            moodBreathPeriodSec = breathSec
+            moodBreathPeriodSec = breathSec,
+            moodRegime = regime
         )
     }
 

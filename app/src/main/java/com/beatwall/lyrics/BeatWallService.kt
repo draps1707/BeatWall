@@ -77,17 +77,23 @@ class BeatWallService : WallpaperService() {
 
         private var activeState: ActiveTrackState? = null
         private var prevState: ActiveTrackState? = null
+        private var isCrossfading = false
         private var crossfadeProgress = 1f
         private var crossfadeStartNanos = 0L
-        private val crossfadeDurationNanos = 550_000_000L
+        private val crossfadeDurationNanos = 850_000_000L
 
         private var lyricsAlpha = 0f
+        private var lyricsAlphaVel = 0f
         private var targetLyricsAlpha = 0f
         private var eqAmp = 0f
+        private var eqVel = 0f
         private var lyricPaceScale = 1.0f
         private var gapRelaxFactor = 0.0f
         private var targetEqAmp = 0f
         private var lockBlend = if (keyguardManager.isKeyguardLocked) 1f else 0f
+        private var lockVel = 0f
+        private var studioPhase = 0.0
+        private var studioOmega = 0.0
 
         private var centeredLayouts: List<StaticLayout> = emptyList()
         private var lyricYCenters: FloatArray = FloatArray(0)
@@ -404,7 +410,7 @@ class BeatWallService : WallpaperService() {
                 val artChanged = activeState?.processedArt !== state?.processedArt
 
                 if (prevKey != newKey) {
-                    if (activeState != null) {
+                    if (activeState != null || state != null) {
                         prevState = activeState
                         prevCenteredLayouts = centeredLayouts
                         prevLyricYCenters = lyricYCenters
@@ -412,6 +418,7 @@ class BeatWallService : WallpaperService() {
                         prevAvgLineStep = avgLineStep
                         prevSpringY = springY
                         prevLyricsAlpha = lyricsAlpha
+                        isCrossfading = true
                         crossfadeProgress = 0f
                         crossfadeStartNanos = 0L
                     }
@@ -421,9 +428,10 @@ class BeatWallService : WallpaperService() {
                     targetY = 0f
                     if (state?.showLyrics != true || state.lyrics.isEmpty()) {
                         lyricsAlpha = 0f
+                        lyricsAlphaVel = 0f
                     }
-                    proceduralAnimator.reroll(calmOnly = state == null)
-                } else if (artChanged && crossfadeProgress >= 1f && activeState != null) {
+                    proceduralAnimator.setTrackSeed(state?.trackKey)
+                } else if (artChanged && !isCrossfading && activeState != null) {
                     prevState = activeState
                     prevCenteredLayouts = centeredLayouts
                     prevLyricYCenters = lyricYCenters
@@ -431,6 +439,7 @@ class BeatWallService : WallpaperService() {
                     prevAvgLineStep = avgLineStep
                     prevSpringY = springY
                     prevLyricsAlpha = lyricsAlpha
+                    isCrossfading = true
                     crossfadeProgress = 0f
                     crossfadeStartNanos = 0L
                 }
@@ -541,10 +550,11 @@ class BeatWallService : WallpaperService() {
         private fun needsAnimation(): Boolean {
             if (!visible || !surfaceReady || !powerManager.isInteractive) return false
             val targetLock = if (keyguardManager.isKeyguardLocked) 1f else 0f
-            if (abs(targetLock - lockBlend) > 0.01f) return true
-            if (crossfadeProgress < 1f) return true
-            if (abs(targetLyricsAlpha - lyricsAlpha) > 0.01f) return true
-            if (abs(targetEqAmp - eqAmp) > 0.01f) return true
+            if (abs(targetLock - lockBlend) > 0.005f || abs(lockVel) > 0.01f) return true
+            if (isCrossfading) return true
+            if (abs(targetLyricsAlpha - lyricsAlpha) > 0.005f || abs(lyricsAlphaVel) > 0.01f) return true
+            if (abs(targetEqAmp - eqAmp) > 0.005f || abs(eqVel) > 0.01f) return true
+            if (proceduralAnimator.isCoasting() || studioOmega > 0.002) return true
             if (isLowBattery) return false
             val st = activeState
             if (st != null && !st.isPlaying) return false
@@ -555,10 +565,11 @@ class BeatWallService : WallpaperService() {
             if (!needsAnimation()) return 0f
             val targetLock = if (keyguardManager.isKeyguardLocked) 1f else 0f
             return if (
-                abs(targetLock - lockBlend) > 0.01f ||
-                crossfadeProgress < 1f ||
-                abs(targetLyricsAlpha - lyricsAlpha) > 0.01f ||
-                abs(targetEqAmp - eqAmp) > 0.01f ||
+                abs(targetLock - lockBlend) > 0.005f || abs(lockVel) > 0.01f ||
+                isCrossfading ||
+                abs(targetLyricsAlpha - lyricsAlpha) > 0.005f || abs(lyricsAlphaVel) > 0.01f ||
+                abs(targetEqAmp - eqAmp) > 0.005f || abs(eqVel) > 0.01f ||
+                proceduralAnimator.isCoasting() || studioOmega > 0.002 ||
                 activeState?.isPlaying == true
             ) {
                 120f
@@ -624,11 +635,12 @@ class BeatWallService : WallpaperService() {
                 }
                 lastFrameNanos = frameTimeNanos
 
-                if (crossfadeProgress < 1f) {
+                if (isCrossfading) {
                     if (crossfadeStartNanos == 0L) crossfadeStartNanos = frameTimeNanos
                     val elapsed = frameTimeNanos - crossfadeStartNanos
                     crossfadeProgress = (elapsed.toFloat() / crossfadeDurationNanos).coerceIn(0f, 1f)
                     if (crossfadeProgress >= 1f) {
+                        isCrossfading = false
                         prevState = null
                         prevCenteredLayouts = emptyList()
                         prevLyricYCenters = FloatArray(0)
@@ -636,34 +648,59 @@ class BeatWallService : WallpaperService() {
                     }
                 }
 
+                // Critically-damped springs (zero hard stops on Lock<->Home, Play<->Pause, Lyrics)
                 val alphaDiff = targetLyricsAlpha - lyricsAlpha
-                if (abs(alphaDiff) > 0.01f) {
-                    val step = (dtSec / 0.35f) * if (alphaDiff > 0) 1f else -1f
-                    lyricsAlpha = (lyricsAlpha + step).coerceIn(0f, 1f)
-                    if (abs(targetLyricsAlpha - lyricsAlpha) <= 0.02f) lyricsAlpha = targetLyricsAlpha
+                if (abs(alphaDiff) > 0.003f || abs(lyricsAlphaVel) > 0.01f) {
+                    val wL = 11.0f
+                    val accL = wL * wL * alphaDiff - 2f * wL * lyricsAlphaVel
+                    lyricsAlphaVel += accL * dtSec
+                    lyricsAlpha = (lyricsAlpha + lyricsAlphaVel * dtSec).coerceIn(0f, 1f)
                 } else {
                     lyricsAlpha = targetLyricsAlpha
+                    lyricsAlphaVel = 0f
                 }
 
                 val targetLock = if (keyguardManager.isKeyguardLocked) 1f else 0f
                 val lockDiff = targetLock - lockBlend
-                if (abs(lockDiff) > 0.005f) {
-                    val step = (dtSec / 0.24f) * if (lockDiff > 0f) 1f else -1f
-                    lockBlend = (lockBlend + step).coerceIn(0f, 1f)
-                    if (abs(targetLock - lockBlend) <= 0.01f) lockBlend = targetLock
+                if (abs(lockDiff) > 0.003f || abs(lockVel) > 0.01f) {
+                    val wK = 14.0f
+                    val accK = wK * wK * lockDiff - 2f * wK * lockVel
+                    lockVel += accK * dtSec
+                    lockBlend = (lockBlend + lockVel * dtSec).coerceIn(0f, 1f)
                 } else {
                     lockBlend = targetLock
+                    lockVel = 0f
                 }
 
                 targetEqAmp = if (activeState?.isPlaying == true && !isLowBattery) 1f else 0f
                 val eqDiff = targetEqAmp - eqAmp
-                if (abs(eqDiff) > 0.01f) {
-                    val step = (dtSec / 0.30f) * if (eqDiff > 0) 1f else -1f
-                    eqAmp = (eqAmp + step).coerceIn(0f, 1f)
-                    if (abs(targetEqAmp - eqAmp) <= 0.02f) eqAmp = targetEqAmp
+                if (abs(eqDiff) > 0.003f || abs(eqVel) > 0.01f) {
+                    val wE = 12.0f
+                    val accE = wE * wE * eqDiff - 2f * wE * eqVel
+                    eqVel += accE * dtSec
+                    eqAmp = (eqAmp + eqVel * dtSec).coerceIn(0f, 1f)
                 } else {
                     eqAmp = targetEqAmp
+                    eqVel = 0f
                 }
+
+                // Momentum & friction phase integrators for music physics + NotebookLM studio
+                val stNow = activeState
+                val isFocusNow = stNow != null && stNow.lyrics.isEmpty() &&
+                    stNow.durationMs >= 20L * 60L * 1000L &&
+                    (stNow.packageName == "com.google.android.youtube" || stNow.packageName == "com.android.chrome")
+                val targetMusicOmega = if (stNow != null && stNow.isPlaying && !isLowBattery) {
+                    if (isFocusNow) 0.35 else (0.85 * lyricPaceScale * (1.0 - 0.25 * gapRelaxFactor))
+                } else 0.0
+                proceduralAnimator.stepPhysics(dtSec, targetMusicOmega)
+
+                val targetStudioOmega = if (stNow != null && stNow.isPlaying && !isLowBattery && (stNow.isNotebookLm || stNow.lyrics.isEmpty())) {
+                    if (isFocusNow) 0.45 else 1.0
+                } else 0.0
+                val stTau = if (targetStudioOmega > studioOmega) 0.45 else 0.65
+                studioOmega += (targetStudioOmega - studioOmega) * (1.0 - kotlin.math.exp(-dtSec.toDouble() / stTau))
+                if (abs(studioOmega) < 0.0005 && targetStudioOmega == 0.0) studioOmega = 0.0
+                studioPhase += studioOmega * dtSec.toDouble()
 
                 val st = activeState
                 if (st != null && st.lyrics.isNotEmpty() && st.showLyrics && lyricYCenters.isNotEmpty()) {
@@ -713,8 +750,9 @@ class BeatWallService : WallpaperService() {
                 val isLock = keyguardManager.isKeyguardLocked
                 canvas.drawColor(0xFF05060A.toInt())
 
-                if (crossfadeProgress < 1f && prevState != null) {
-                    val eased = crossfadeProgress * crossfadeProgress * (3f - 2f * crossfadeProgress)
+                if (isCrossfading && crossfadeProgress < 1f) {
+                    val t = crossfadeProgress
+                    val eased = t * t * t * (10f - 15f * t + 6f * t * t)
                     drawState(canvas, prevState, isLock, 1f - eased, frameTimeNanos)
                     drawState(canvas, activeState, isLock, eased, frameTimeNanos)
                 } else {
@@ -783,18 +821,19 @@ class BeatWallService : WallpaperService() {
             val primary = art?.primaryGlowColor ?: 0xFF38BDF8.toInt()
             val secondary = art?.secondaryGlowColor ?: 0xFF1E293B.toInt()
             val moodScale = art?.moodGlowScale ?: 1.0f
+            val physicsRegime = if (isLongFormFocus) 0 else (art?.moodRegime ?: 2)
 
-            if (!isLock && state.isPlaying && !isLowBattery) {
-                val animScale = moodScale * (1f - 0.25f * gapRelaxFactor) * (if (isLongFormFocus) 0.45f else 1.0f)
+            if (!isLock && (state.isPlaying || proceduralAnimator.isCoasting()) && !isLowBattery) {
+                val animScale = moodScale * (1f - 0.25f * gapRelaxFactor) * (if (isLongFormFocus) 0.50f else 1.0f)
                 val animAlpha = (masterAlpha * animScale).toInt().coerceIn(0, 255)
                 proceduralAnimator.draw(
                     canvas = canvas,
                     width = width,
                     height = height,
-                    timeSec = timeSec,
                     accent = accent,
                     primary = primary,
                     secondary = secondary,
+                    regime = physicsRegime,
                     masterAlpha = animAlpha
                 )
             }
@@ -1252,16 +1291,20 @@ class BeatWallService : WallpaperService() {
             timeSec: Double,
             masterAlpha: Int
         ) {
-            val isPlaying = state.isPlaying && !isLowBattery
-            val cy = if (isLock) height * 0.55f else height * 0.48f
-            val cx = width * 0.50f
-            val sep = width * 0.11f
+            val cyBase = if (isLock) height * 0.55f else height * 0.48f
+            val cxBase = width * 0.50f
+            val p = studioPhase
+            val baryX = sin(p * 0.42).toFloat() * (width * 0.025f)
+            val baryY = kotlin.math.cos(p * 0.42 * 1.4142).toFloat() * (height * 0.015f)
+            val cx = cxBase + baryX
+            val cy = cyBase + baryY
 
-            val turnA = if (isPlaying) 0.55f + 0.45f * sin(timeSec * 2.4).toFloat() else 0.45f
-            val turnB = if (isPlaying) 0.55f + 0.45f * sin(timeSec * 2.4 + PI).toFloat() else 0.45f
+            val turnA = (0.50f + 0.50f * (0.65f * sin(p * 2.1).toFloat() + 0.35f * sin(p * 2.1 * 1.618).toFloat())).coerceIn(0f, 1f)
+            val turnB = (0.50f + 0.50f * (0.65f * sin(p * 2.1 + PI).toFloat() + 0.35f * sin(p * 2.1 * 1.618 + 2.1).toFloat())).coerceIn(0f, 1f)
+            val sep = width * (0.115f - 0.018f * (turnA * turnB))
 
-            val rA = width * (0.14f + 0.05f * turnA)
-            val rB = width * (0.14f + 0.05f * turnB)
+            val rA = width * (0.14f + 0.05f * turnA * eqAmp)
+            val rB = width * (0.14f + 0.05f * turnB * eqAmp)
 
             orbPaint.shader = RadialGradient(
                 cx - sep, cy, rA,
@@ -1336,7 +1379,7 @@ class BeatWallService : WallpaperService() {
                     val frac = s.toFloat() / steps
                     val x = ribbonLeft + frac * ribbonW
                     val env = sin(frac * PI).toFloat()
-                    val y = cy + sin(frac * freq * PI - timeSec * speed + rIdx * 1.4).toFloat() * amp * env
+                    val y = cy + sin(frac * freq * PI - studioPhase * speed + rIdx * 1.4).toFloat() * amp * env
                     if (s == 0) ribbonPath.moveTo(x, y) else ribbonPath.lineTo(x, y)
                 }
                 canvas.drawPath(ribbonPath, ribbonPaint)
