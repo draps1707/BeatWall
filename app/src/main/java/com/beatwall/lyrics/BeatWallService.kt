@@ -84,6 +84,8 @@ class BeatWallService : WallpaperService() {
         private var lyricsAlpha = 0f
         private var targetLyricsAlpha = 0f
         private var eqAmp = 0f
+        private var lyricPaceScale = 1.0f
+        private var gapRelaxFactor = 0.0f
         private var targetEqAmp = 0f
         private var lockBlend = if (keyguardManager.isKeyguardLocked) 1f else 0f
 
@@ -751,16 +753,40 @@ class BeatWallService : WallpaperService() {
                 return
             }
 
+            val isLongFormFocus = state.lyrics.isEmpty() &&
+                state.durationMs >= 20L * 60L * 1000L &&
+                (state.packageName == "com.google.android.youtube" || state.packageName == "com.android.chrome")
+
+            if (state === activeState) {
+                var targetPace = 1.0f
+                var targetRelax = 0.0f
+                if (state.lyrics.isNotEmpty() && state.isPlaying) {
+                    val approxIdx = LrcParser.findLineIndex(state.lyrics, state.currentPositionMs())
+                    if (approxIdx in 0 until state.lyrics.lastIndex) {
+                        val lineGapMs = (state.lyrics[approxIdx + 1].timeMs - state.lyrics[approxIdx].timeMs).coerceAtLeast(500L)
+                        targetPace = (3500f / lineGapMs.toFloat()).coerceIn(0.75f, 1.32f)
+                        if (lineGapMs > 10_000L) targetRelax = 1.0f
+                    }
+                }
+                lyricPaceScale += (targetPace - lyricPaceScale) * 0.04f
+                gapRelaxFactor += (targetRelax - gapRelaxFactor) * 0.03f
+            }
+
             val art = state.processedArt
             if (art != null) {
-                drawBreathingBackdrop(canvas, art.blurredBackdrop, state.isPlaying && !isLowBattery, timeSec, masterAlpha)
+                val breathSec = if (isLongFormFocus) 22.0 else art.moodBreathPeriodSec
+                val breathAmp = if (isLongFormFocus) 0.009f else 0.0175f
+                drawBreathingBackdrop(canvas, art.blurredBackdrop, state.isPlaying && !isLowBattery, timeSec, masterAlpha, breathSec, breathAmp)
             }
 
             val accent = art?.lyricAccentColor ?: 0xFF7DD3FC.toInt()
             val primary = art?.primaryGlowColor ?: 0xFF38BDF8.toInt()
             val secondary = art?.secondaryGlowColor ?: 0xFF1E293B.toInt()
+            val moodScale = art?.moodGlowScale ?: 1.0f
 
             if (!isLock && state.isPlaying && !isLowBattery) {
+                val animScale = moodScale * (1f - 0.25f * gapRelaxFactor) * (if (isLongFormFocus) 0.45f else 1.0f)
+                val animAlpha = (masterAlpha * animScale).toInt().coerceIn(0, 255)
                 proceduralAnimator.draw(
                     canvas = canvas,
                     width = width,
@@ -769,7 +795,7 @@ class BeatWallService : WallpaperService() {
                     accent = accent,
                     primary = primary,
                     secondary = secondary,
-                    masterAlpha = masterAlpha
+                    masterAlpha = animAlpha
                 )
             }
 
@@ -814,7 +840,7 @@ class BeatWallService : WallpaperService() {
                     frameTimeNanos = frameTimeNanos
                 )
             } else if (!state.isFetchingLyrics && (!state.showLyrics || state.lyrics.isEmpty())) {
-                drawInstrumentalStudio(canvas, state, lb, timeSec, accent, primary, masterAlpha)
+                drawInstrumentalStudio(canvas, state, lb, timeSec, accent, primary, masterAlpha, isLongFormFocus)
             }
         }
 
@@ -1279,14 +1305,17 @@ class BeatWallService : WallpaperService() {
             timeSec: Double,
             accent: Int,
             primary: Int,
-            masterAlpha: Int
+            masterAlpha: Int,
+            isFocusMode: Boolean = false
         ) {
             val isPlaying = state.isPlaying && !isLowBattery
             val cy = height * (0.49f + (0.56f - 0.49f) * lb)
             val cx = width * 0.50f
             val ribbonLeft = width * 0.14f
             val ribbonW = width * 0.72f
-            val amp = width * 0.030f * eqAmp
+            val focusAmpScale = if (isFocusMode) 0.55f else 1.0f
+            val focusSpeedScale = if (isFocusMode) 0.45 else 1.0
+            val amp = width * 0.030f * eqAmp * focusAmpScale
 
             // Option B: 3 Harmonic Silk Ribbons undulating smoothly across center (flatten on pause)
             val steps = 40
@@ -1302,7 +1331,7 @@ class BeatWallService : WallpaperService() {
                 ribbonPaint.alpha = (masterAlpha * baseA * (0.45f + 0.55f * eqAmp)).toInt().coerceIn(0, 255)
                 ribbonPath.reset()
                 val freq = 2.6 + rIdx * 0.85
-                val speed = 2.8 + rIdx * 0.65
+                val speed = (2.8 + rIdx * 0.65) * focusSpeedScale
                 for (s in 0..steps) {
                     val frac = s.toFloat() / steps
                     val x = ribbonLeft + frac * ribbonW
@@ -1355,10 +1384,12 @@ class BeatWallService : WallpaperService() {
             bmp: android.graphics.Bitmap,
             animate: Boolean,
             timeSec: Double,
-            alpha: Int
+            alpha: Int,
+            breathPeriodSec: Double = 14.0,
+            breathAmp: Float = 0.0175f
         ) {
             val breath = if (animate) {
-                1.0f + 0.0175f * (1f + sin(timeSec * (2.0 * PI / 14.0)).toFloat())
+                1.0f + breathAmp * (1f + sin(timeSec * (2.0 * PI / breathPeriodSec)).toFloat())
             } else 1.0f
             val extraW = width * (breath - 1f) * 0.5f
             val extraH = height * (breath - 1f) * 0.5f
@@ -1531,7 +1562,7 @@ class BeatWallService : WallpaperService() {
             val breathEnv = 0.75f + 0.25f * sin(timeSec * 2.1).toFloat()
             for (b in 0 until barCount) {
                 val wave = if (ampScale > 0.01f) {
-                    0.15f + 0.85f * ((sin(timeSec * 5.2 + b * 1.15) + 1.0) * 0.5).toFloat() * breathEnv
+                    0.15f + 0.85f * ((sin(timeSec * (5.2 * lyricPaceScale * (1f - 0.22f * gapRelaxFactor)) + b * 1.15) + 1.0) * 0.5).toFloat() * breathEnv
                 } else {
                     0f
                 }

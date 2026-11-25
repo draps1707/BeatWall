@@ -26,7 +26,9 @@ data class ProcessedArt(
     val blurredBackdrop: Bitmap,
     val primaryGlowColor: Int,
     val secondaryGlowColor: Int,
-    val lyricAccentColor: Int
+    val lyricAccentColor: Int,
+    val moodGlowScale: Float = 1.0f,
+    val moodBreathPeriodSec: Double = 14.0
 )
 
 data class CircadianTheme(
@@ -322,12 +324,25 @@ class ArtEffectProcessor {
         renderBlurredBackdrop(rawCover, targetSlot, primaryGlow, secondaryGlow)
         val crispCover = scaleSquareCover(rawCover, 720)
 
+        val domHsl = palette.dominantSwatch?.hsl ?: palette.vibrantSwatch?.hsl
+        val hue = domHsl?.getOrNull(0) ?: 210f
+        val sat = domHsl?.getOrNull(1) ?: 0.35f
+        val lum = domHsl?.getOrNull(2) ?: 0.35f
+        val (moodScale, breathSec) = when {
+            sat < 0.18f || lum < 0.18f -> 0.72f to 18.0
+            sat > 0.50f -> 1.12f to 13.0
+            hue <= 55f || hue >= 330f -> 0.92f to 17.0
+            else -> 1.00f to 14.0
+        }
+
         return ProcessedArt(
             coverArt = crispCover,
             blurredBackdrop = targetSlot,
             primaryGlowColor = primaryGlow,
             secondaryGlowColor = secondaryGlow,
-            lyricAccentColor = accentGlow
+            lyricAccentColor = accentGlow,
+            moodGlowScale = moodScale,
+            moodBreathPeriodSec = breathSec
         )
     }
 
