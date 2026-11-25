@@ -1199,20 +1199,18 @@ class BeatWallService : WallpaperService() {
             drawSoftOval(orbX, horizonY + seaSpan * 0.24f, width * 0.085f * windScale, seaSpan * 0.30f, shimRgb or (upperAlpha shl 24))
             drawSoftOval(orbX, horizonY + seaSpan * 0.56f, width * 0.155f * windScale, seaSpan * 0.44f, shimRgb or (lowerAlpha shl 24))
 
-            // 8 organic Cox-Munk wave micro-glints (1 : sqrt(2) : phi shimmer, zero horizontal laser bars)
-            baselinePaint.color = shimRgb or (0xFF000000.toInt())
-            baselinePaint.strokeWidth = density * 1.15f
-            for (gIdx in 0 until 8) {
-                val fracY = 0.08f + (gIdx / 7f) * 0.72f
+            // Soft lineless Cox-Munk shimmer plumes (0 straight drawLine strokes on water)
+            for (gIdx in 0 until 4) {
+                val fracY = 0.12f + gIdx * 0.19f
                 val gy = horizonY + seaSpan * fracY
-                val wavePhase = timeSec * (1.1 + (gIdx % 3) * 0.37) * 1.618 + gIdx * 2.13
+                val wavePhase = timeSec * (0.95 + gIdx * 0.24) * 1.618 + gIdx * 1.9
                 val glintVis = ((sin(wavePhase) + 1.0) * 0.5).toFloat()
-                val spreadX = sin(timeSec * 0.65 * 1.4142 + gIdx * 1.7).toFloat() * (width * (0.018f + 0.032f * fracY) * windScale)
-                val glintHalfW = width * (0.008f + 0.014f * fracY) * (0.65f + 0.35f * windScale) * (0.5f + 0.5f * glintVis)
-                val gAlpha = (masterAlpha * (0.28f - 0.16f * fracY) * lumBoost * glintVis).toInt().coerceIn(0, 255)
+                val spreadX = sin(timeSec * 0.55 * 1.4142 + gIdx * 1.7).toFloat() * (width * (0.020f + 0.025f * fracY) * windScale)
+                val rx = width * (0.038f + 0.032f * fracY) * windScale
+                val ry = seaSpan * (0.045f + 0.035f * fracY)
+                val gAlpha = (masterAlpha * (0.14f - 0.07f * fracY) * lumBoost * (0.45f + 0.55f * glintVis)).toInt().coerceIn(0, 255)
                 if (gAlpha > 2) {
-                    baselinePaint.alpha = gAlpha
-                    canvas.drawLine(orbX + spreadX - glintHalfW, gy, orbX + spreadX + glintHalfW, gy, baselinePaint)
+                    drawSoftOval(orbX + spreadX, gy, rx, ry, shimRgb or (gAlpha shl 24))
                 }
             }
 
@@ -1351,20 +1349,39 @@ class BeatWallService : WallpaperService() {
             val ribbonW = width * 0.72f
             val focusAmpScale = if (isFocusMode) 0.55f else 1.0f
             val focusSpeedScale = if (isFocusMode) 0.45 else 1.0
-            val amp = width * 0.030f * eqAmp * focusAmpScale
+            val amp = width * 0.058f * eqAmp * focusAmpScale
+
+            // Soft radial studio aura behind the ribbons synced to studioPhase
+            if (eqAmp > 0.02f) {
+                val auraBreath = 1.0f + 0.14f * sin(studioPhase * 1.15).toFloat()
+                val auraRx = width * 0.42f * auraBreath
+                val auraRy = width * 0.16f * auraBreath
+                val auraAlpha = (masterAlpha * (if (isFocusMode) 0.16f else 0.30f) * eqAmp).toInt().coerceIn(0, 255)
+                val auraCol = (accent and 0x00FFFFFF) or (auraAlpha shl 24)
+                val auraSh = if (cachedSoftMistColor == auraCol && cachedSoftMistShader != null) cachedSoftMistShader!! else {
+                    RadialGradient(0f, 0f, 1f, intArrayOf(auraCol, (accent and 0x00FFFFFF) or (((auraAlpha * 0.35f).toInt()) shl 24), Color.TRANSPARENT), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+                        .also { cachedSoftMistColor = auraCol; cachedSoftMistShader = it }
+                }
+                shaderMatrix.reset(); shaderMatrix.setScale(auraRx, auraRy); shaderMatrix.postTranslate(cx, cy)
+                auraSh.setLocalMatrix(shaderMatrix)
+                orbPaint.shader = auraSh
+                backdropRect.set(cx - auraRx, cy - auraRy, cx + auraRx, cy + auraRy)
+                canvas.drawOval(backdropRect, orbPaint)
+                orbPaint.shader = null
+            }
 
             // Option B: 3 Harmonic Silk Ribbons undulating smoothly across center (flatten on pause)
             val steps = 40
             for (rIdx in 0 until 3) {
                 val col = if (rIdx == 1) primary else accent
                 val baseA = when (rIdx) {
-                    0 -> 0.28f
-                    1 -> 0.42f
-                    else -> 0.22f
+                    0 -> 0.42f
+                    1 -> 0.68f
+                    else -> 0.36f
                 }
-                ribbonPaint.strokeWidth = density * (if (rIdx == 1) 1.9f else 1.25f)
+                ribbonPaint.strokeWidth = density * (if (rIdx == 1) 2.3f else 1.5f)
                 ribbonPaint.color = col
-                ribbonPaint.alpha = (masterAlpha * baseA * (0.45f + 0.55f * eqAmp)).toInt().coerceIn(0, 255)
+                ribbonPaint.alpha = (masterAlpha * baseA * (0.45f + 0.55f * eqAmp) * (if (isFocusMode) 0.68f else 1.0f)).toInt().coerceIn(0, 255)
                 ribbonPath.reset()
                 val freq = 2.6 + rIdx * 0.85
                 val speed = (2.8 + rIdx * 0.65) * focusSpeedScale

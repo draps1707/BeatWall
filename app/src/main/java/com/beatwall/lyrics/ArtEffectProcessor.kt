@@ -315,9 +315,37 @@ class ArtEffectProcessor {
             palette.getVibrantColor(0xFF7DD3FC.toInt())
         )
 
-        val primaryGlow = clampLuminance(rawPrimary, maxV = 0.62f)
-        val secondaryGlow = clampLuminance(rawSecondary, maxV = 0.52f)
-        val accentGlow = ensureVibrantAccent(rawAccent)
+        fun enrichJewelGlow(col: Int, maxV: Float): Int {
+            val clamped = clampLuminance(col, maxV = maxV)
+            val hsv = FloatArray(3)
+            Color.colorToHSV(clamped, hsv)
+            if (hsv[1] > 0.08f) {
+                hsv[1] = hsv[1].coerceAtLeast(0.46f).coerceAtMost(0.92f)
+                hsv[2] = hsv[2].coerceIn(0.22f, maxV)
+            }
+            return Color.HSVToColor(hsv)
+        }
+
+        val primaryGlow = enrichJewelGlow(rawPrimary, maxV = 0.58f)
+        val secondaryGlow = enrichJewelGlow(rawSecondary, maxV = 0.48f)
+
+        val pHsv = FloatArray(3)
+        Color.colorToHSV(primaryGlow, pHsv)
+        val rawAccBoosted = ensureVibrantAccent(rawAccent)
+        val aHsv = FloatArray(3)
+        Color.colorToHSV(rawAccBoosted, aHsv)
+        val rawHueDiff = abs(pHsv[0] - aHsv[0])
+        val hueDiff = minOf(rawHueDiff, 360f - rawHueDiff)
+        // Guarantee dual-tone Blinding Lights contrast when accent is too close to backdrop or muddy
+        val accentGlow = if (hueDiff < 42f || aHsv[1] < 0.35f) {
+            if (pHsv[0] < 70f || pHsv[0] > 300f) {
+                0xFF7DD3FC.toInt() // Crisp electric sky-blue over warm/crimson/amber covers
+            } else {
+                0xFFFDE68A.toInt() // Luminous warm gold-ivory over cool blue/teal/green covers
+            }
+        } else {
+            rawAccBoosted
+        }
 
         val targetSlot = pool[poolIdx]
         poolIdx = (poolIdx + 1) % pool.size
@@ -354,27 +382,27 @@ class ArtEffectProcessor {
         primaryGlow: Int,
         secondaryGlow: Int
     ) {
-        val blurred = gpuBlurToBitmap(src, blurWidth, blurHeight, radius = 72f)
+        val blurred = gpuBlurToBitmap(src, blurWidth, blurHeight, radius = 56f)
         val canvas = Canvas(dest)
         canvas.drawColor(0xFF05060A.toInt())
 
         if (blurred != null) {
-            val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply { alpha = 185 }
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply { alpha = 175 }
             canvas.drawBitmap(blurred, null, Rect(0, 0, blurWidth, blurHeight), paint)
             blurred.recycle()
         }
 
         val glowPaint1 = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
             shader = RadialGradient(
-                blurWidth * 0.25f, blurHeight * 0.32f, blurWidth * 1.0f,
-                intArrayOf(withAlpha(primaryGlow, 210), Color.TRANSPARENT),
+                blurWidth * 0.30f, blurHeight * 0.36f, blurWidth * 0.92f,
+                intArrayOf(withAlpha(primaryGlow, 140), Color.TRANSPARENT),
                 null, Shader.TileMode.CLAMP
             )
         }
         val glowPaint2 = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
             shader = RadialGradient(
-                blurWidth * 0.78f, blurHeight * 0.66f, blurWidth * 1.0f,
-                intArrayOf(withAlpha(secondaryGlow, 200), Color.TRANSPARENT),
+                blurWidth * 0.74f, blurHeight * 0.62f, blurWidth * 0.92f,
+                intArrayOf(withAlpha(secondaryGlow, 130), Color.TRANSPARENT),
                 null, Shader.TileMode.CLAMP
             )
         }
@@ -384,7 +412,7 @@ class ArtEffectProcessor {
         val vignettePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
             shader = LinearGradient(
                 0f, 0f, 0f, blurHeight.toFloat(),
-                intArrayOf(0xAA040508.toInt(), 0x24000000, 0x24000000, 0xCC040508.toInt()),
+                intArrayOf(0xBB040508.toInt(), 0x28000000, 0x28000000, 0xD4040508.toInt()),
                 floatArrayOf(0f, 0.28f, 0.72f, 1f),
                 Shader.TileMode.CLAMP
             )
