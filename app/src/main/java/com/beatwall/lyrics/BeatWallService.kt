@@ -1118,7 +1118,7 @@ class BeatWallService : WallpaperService() {
                 for (g in 0 until 4) {
                     val offsetX = g * 0.055f
                     val offsetY = (g % 2) * 0.018f + (g / 2) * 0.024f
-                    val gx = (((0.22f + offsetX + (timeSec * 0.016).toFloat()) % 1.28f) - 0.14f) * width
+                    val gx = (((0.22f + offsetX + (timeSec * 0.014 * windFactor).toFloat()) % 1.28f) - 0.14f) * width
                     val gy = height * (0.29f + offsetY) - sin(timeSec * 0.8 + g * 0.9).toFloat() * (height * 0.007f)
                     val span = width * (0.014f - g * 0.0018f)
                     val flap = sin(timeSec * 2.8 + g * 1.3).toFloat() * (span * 0.38f)
@@ -1171,9 +1171,10 @@ class BeatWallService : WallpaperService() {
                 baselinePaint.strokeWidth = density * 0.8f
                 baselinePaint.color = 0xFFBAE6FD.toInt()
                 for (rp in 0 until 4) {
-                    val rpProg = (((timeSec * 0.55) + rp * 0.25) % 1.0).toFloat()
-                    val rx = width * (0.18f + rp * 0.21f)
-                    val ry = horizonY + (shoreY - horizonY) * (0.28f + (rp % 2) * 0.30f)
+                    val hRp = abs(sin(rp * 12.9898 + 1.3)).toFloat()
+                    val rpProg = (((timeSec * (0.50 + hRp * 0.20)) + rp * 0.25 + hRp * 0.31) % 1.0).toFloat()
+                    val rx = width * (0.12f + 0.76f * hRp)
+                    val ry = horizonY + (shoreY - horizonY) * (0.22f + 0.54f * abs(sin(rp * 78.233)).toFloat())
                     val rad = width * (0.01f + rpProg * 0.035f)
                     baselinePaint.alpha = (masterAlpha * 0.24f * (1f - rpProg)).toInt().coerceIn(0, 255)
                     backdropRect.set(rx - rad, ry - rad * 0.28f, rx + rad, ry + rad * 0.28f)
@@ -1186,23 +1187,39 @@ class BeatWallService : WallpaperService() {
             val mirageAlpha = (masterAlpha * (if (isDay) 0.24f else 0.11f)).toInt().coerceIn(0, 255)
             drawSoftOval(width * 0.5f, horizonY, width * 0.90f, height * 0.020f, mirageRgb or (mirageAlpha shl 24))
 
-            val seaMidY = horizonY + (shoreY - horizonY) * 0.42f
-            val seaSpanY = (shoreY - horizonY) * 0.52f
+            val seaSpan = (shoreY - horizonY).coerceAtLeast(1f)
             val shimRgb = if (sky.sunAltDeg > -4f) (sky.sunColor and 0x00FFFFFF) else (sky.moonColor and 0x00FFFFFF)
+            val lumBoost = if (sky.sunAltDeg > -4f) 1.0f else (0.55f + 0.45f * sky.moonIllumination.coerceIn(0f, 1f))
             val windScale = (0.75f + (weatherState.windKmh / 28f)).coerceIn(0.75f, 1.8f)
             val shimBreath = 0.88f + 0.12f * sin(timeSec * 0.9).toFloat()
-            val shimAlpha = (masterAlpha * (if (isDay) 0.22f else 0.16f) * shimBreath).toInt().coerceIn(0, 255)
-            drawSoftOval(orbX, seaMidY, width * 0.13f * windScale, seaSpanY, shimRgb or (shimAlpha shl 24))
-            for (r in 0 until 3) {
-                val ry = horizonY + (shoreY - horizonY) * (0.14f + r * 0.22f)
-                val rxShift = sin(timeSec * 0.7 + r * 1.5).toFloat() * (width * 0.025f)
-                val rAlpha = (masterAlpha * (0.12f - r * 0.02f)).toInt().coerceIn(0, 255)
-                drawSoftOval(orbX + rxShift, ry, width * (0.10f + r * 0.03f) * windScale, height * 0.005f, shimRgb or (rAlpha shl 24))
+
+            // Tapered perspective reflection cone (brighter/narrower near horizon, wider/softer toward shore)
+            val upperAlpha = (masterAlpha * (if (isDay) 0.22f else 0.16f) * lumBoost * shimBreath).toInt().coerceIn(0, 255)
+            val lowerAlpha = (masterAlpha * (if (isDay) 0.12f else 0.09f) * lumBoost * shimBreath).toInt().coerceIn(0, 255)
+            drawSoftOval(orbX, horizonY + seaSpan * 0.24f, width * 0.085f * windScale, seaSpan * 0.30f, shimRgb or (upperAlpha shl 24))
+            drawSoftOval(orbX, horizonY + seaSpan * 0.56f, width * 0.155f * windScale, seaSpan * 0.44f, shimRgb or (lowerAlpha shl 24))
+
+            // 8 organic Cox-Munk wave micro-glints (1 : sqrt(2) : phi shimmer, zero horizontal laser bars)
+            baselinePaint.color = shimRgb or (0xFF000000.toInt())
+            baselinePaint.strokeWidth = density * 1.15f
+            for (gIdx in 0 until 8) {
+                val fracY = 0.08f + (gIdx / 7f) * 0.72f
+                val gy = horizonY + seaSpan * fracY
+                val wavePhase = timeSec * (1.1 + (gIdx % 3) * 0.37) * 1.618 + gIdx * 2.13
+                val glintVis = ((sin(wavePhase) + 1.0) * 0.5).toFloat()
+                val spreadX = sin(timeSec * 0.65 * 1.4142 + gIdx * 1.7).toFloat() * (width * (0.018f + 0.032f * fracY) * windScale)
+                val glintHalfW = width * (0.008f + 0.014f * fracY) * (0.65f + 0.35f * windScale) * (0.5f + 0.5f * glintVis)
+                val gAlpha = (masterAlpha * (0.28f - 0.16f * fracY) * lumBoost * glintVis).toInt().coerceIn(0, 255)
+                if (gAlpha > 2) {
+                    baselinePaint.alpha = gAlpha
+                    canvas.drawLine(orbX + spreadX - glintHalfW, gy, orbX + spreadX + glintHalfW, gy, baselinePaint)
+                }
             }
 
             // 5. Tiny Distant Sailboat
-            val boatX = (((0.20f + (timeSec * 0.0060).toFloat()) % 1.16f) - 0.08f) * width
-            val boatBob = sin(timeSec * 1.5).toFloat() * (density * 1.8f)
+            val boatSpeed = 0.0045 + (weatherState.windKmh / 24.0).coerceIn(0.2, 1.5) * 0.0035
+            val boatX = (((0.20f + (timeSec * boatSpeed).toFloat()) % 1.16f) - 0.08f) * width
+            val boatBob = sin(timeSec * (1.3 + weatherState.windKmh * 0.02)).toFloat() * (density * (1.4f + (weatherState.windKmh / 20f).coerceIn(0f, 1.5f)))
             val boatY = horizonY + height * 0.013f + boatBob
             val boatCol = if (isDay) 0xFF0F172A.toInt() else 0xFF020617.toInt()
             eqBarPaint.color = boatCol
@@ -1218,67 +1235,43 @@ class BeatWallService : WallpaperService() {
             moonPath.close()
             canvas.drawPath(moonPath, eqBarPaint)
 
-            // 6. Natural Foreshortened 3-Wave Surf & Receding Shore Foam (0 allocs)
+            // 6. Lineless Wind & Tide-Driven 3-Wave Surf + Receding Shore Foam (0 wire lines, 0 allocs)
             val swellRgb = if (isDay) 0x00E0F2FE else 0x0094A3B8
             val foamRgb = if (isDay) 0x00F8FAFC else 0x00CBD5E1
-            val crestColor = if (isDay) 0xFFF8FAFC.toInt() else 0xFF94A3B8.toInt()
-            val surfEnergy = (0.78f + (weatherState.windKmh / 42f)).coerceIn(0.75f, 1.35f)
-            val seaSpan = (shoreY - horizonY).coerceAtLeast(1f)
+            val surfEnergy = (0.76f + (weatherState.windKmh / 36f) + (sky.tideFrac * 0.15f)).coerceIn(0.72f, 1.45f)
+            val waveSpeed = 0.044 + (weatherState.windKmh / 500.0).coerceIn(0.0, 0.030)
 
             // Subtle breathing tidal shoreline mist right at shoreY (83%..87%)
             val tideBreath = 0.85f + 0.15f * sin(timeSec * 0.45).toFloat()
             val tideAlpha = (masterAlpha * (if (isDay) 0.14f else 0.09f) * tideBreath).toInt().coerceIn(0, 255)
             drawSoftOval(width * 0.5f, shoreY + height * 0.004f, width * 0.78f, height * 0.011f, foamRgb or (tideAlpha shl 24))
 
-            val steps = 24
             for (wIdx in 0 until 3) {
-                val waveProg = (((timeSec * 0.052) + wIdx / 3.0) % 1.0).toFloat()
-                // Perspective easing: glassy upper ocean stays calm, lower swells accelerate toward shore
+                val waveProg = (((timeSec * waveSpeed) + wIdx / 3.0) % 1.0).toFloat()
                 val persp = waveProg * kotlin.math.sqrt(waveProg)
-                val wy = horizonY + seaSpan * (0.36f + persp * 0.65f)
+                val wy = horizonY + seaSpan * (0.34f + persp * 0.66f)
                 val env = sin(waveProg * PI).toFloat()
 
-                // Asymmetric broken horizontal span (never edge-to-edge wires)
-                val centerFrac = when (wIdx) {
-                    0 -> 0.46f
-                    1 -> 0.56f
-                    else -> 0.42f
-                }
-                val halfSpanFrac = 0.34f + 0.10f * waveProg
-                val xStart = width * (centerFrac - halfSpanFrac).coerceAtLeast(0f)
-                val xEnd = width * (centerFrac + halfSpanFrac).coerceAtMost(1f)
-                val spanW = (xEnd - xStart).coerceAtLeast(1f)
-
-                val glowAlpha = (masterAlpha * env * (if (isDay) 0.14f else 0.08f) * surfEnergy).toInt().coerceIn(0, 255)
+                // Organic lateral drift & split swell bands (zero thin wire strokes)
+                val driftX = sin(timeSec * 0.32 * 1.618 + wIdx * 2.1).toFloat() * (width * 0.06f)
+                val cx = width * (0.44f + (wIdx % 2) * 0.12f) + driftX
+                val halfW = width * (0.30f + 0.12f * waveProg)
+                val bandH = height * (0.006f + 0.008f * waveProg)
+                val glowAlpha = (masterAlpha * env * (if (isDay) 0.17f else 0.10f) * surfEnergy).toInt().coerceIn(0, 255)
                 if (glowAlpha > 2) {
-                    drawSoftOval(xStart + spanW * 0.5f, wy, spanW * 0.52f, height * (0.006f + 0.006f * waveProg), swellRgb or (glowAlpha shl 24))
-                }
-
-                // Soft multi-harmonic crest only in mid-to-lower surf zone
-                val crestAlpha = (masterAlpha * env * (if (isDay) 0.22f else 0.12f) * waveProg * surfEnergy).toInt().coerceIn(0, 255)
-                if (crestAlpha > 2) {
-                    baselinePaint.strokeWidth = density * (0.85f + 0.45f * waveProg)
-                    baselinePaint.color = crestColor
-                    baselinePaint.alpha = crestAlpha
-                    moonPath.reset()
-                    for (k in 0..steps) {
-                        val fx = k.toFloat() / steps
-                        val wx = xStart + fx * spanW
-                        val dy = (sin(fx * 2.4 * PI + timeSec * 0.65 + wIdx * 2.1) +
-                                  0.42 * sin(fx * 5.3 * PI - timeSec * 0.45 + wIdx * 1.3)).toFloat() * (height * 0.0032f)
-                        if (k == 0) moonPath.moveTo(wx, wy + dy) else moonPath.lineTo(wx, wy + dy)
-                    }
-                    canvas.drawPath(moonPath, baselinePaint)
+                    drawSoftOval(cx, wy, halfW, bandH, swellRgb or (glowAlpha shl 24))
+                    // Secondary offset swell lobe for natural broken crest volume
+                    drawSoftOval(cx - halfW * 0.35f, wy - bandH * 0.25f, halfW * 0.55f, bandH * 0.75f, foamRgb or ((glowAlpha * 0.55f).toInt() shl 24))
                 }
 
                 // Receding shore foam wash as the swell reaches shoreY
-                if (waveProg > 0.68f) {
-                    val washFrac = ((waveProg - 0.68f) / 0.32f).coerceIn(0f, 1f)
+                if (waveProg > 0.66f) {
+                    val washFrac = ((waveProg - 0.66f) / 0.34f).coerceIn(0f, 1f)
                     val washEnv = sin(washFrac * PI).toFloat()
-                    val washY = shoreY + height * (0.008f * washEnv)
-                    val washAlpha = (masterAlpha * washEnv * (if (isDay) 0.20f else 0.11f) * surfEnergy).toInt().coerceIn(0, 255)
+                    val washY = shoreY + height * (0.009f * washEnv)
+                    val washAlpha = (masterAlpha * washEnv * (if (isDay) 0.22f else 0.12f) * surfEnergy).toInt().coerceIn(0, 255)
                     if (washAlpha > 2) {
-                        drawSoftOval(xStart + spanW * 0.5f, washY, spanW * 0.56f, height * (0.008f + 0.007f * washEnv), foamRgb or (washAlpha shl 24))
+                        drawSoftOval(cx, washY, halfW * 1.12f, height * (0.008f + 0.008f * washEnv), foamRgb or (washAlpha shl 24))
                     }
                 }
             }
@@ -1535,7 +1528,7 @@ class BeatWallService : WallpaperService() {
 
             val titleH = titleLayout.height.toFloat()
             val artistH = headerArtistPaint.fontSpacing
-            val eqRowOffset = thumbSize * 0.15f
+            val eqRowOffset = thumbSize * 0.23f
             val totalBlockH = titleH + artistH * 0.92f + eqRowOffset
             val blockTop = (headerTop + (thumbSize - totalBlockH) * 0.5f).coerceAtLeast(headerTop - thumbSize * 0.04f)
 
@@ -1582,9 +1575,9 @@ class BeatWallService : WallpaperService() {
             alpha: Int
         ) {
             val barCount = 5
-            val barW = width * 0.0055f
-            val barGap = width * 0.013f
-            val maxBarH = width * 0.036f
+            val barW = width * 0.0072f
+            val barGap = width * 0.0155f
+            val maxBarH = width * 0.052f
             val eqSpan = (barCount - 1) * barGap + barW
             val padGap = width * 0.011f
             val posX = startX + (totalW - eqSpan).coerceAtLeast(0f) * progressFrac.coerceIn(0f, 1f)
@@ -1597,6 +1590,24 @@ class BeatWallService : WallpaperService() {
             if (playedEnd > startX + 2f) {
                 baselinePaint.alpha = (alpha * 0.62f).toInt().coerceIn(0, 255)
                 canvas.drawLine(startX, centerY, playedEnd, centerY, baselinePaint)
+            }
+
+            // Soft traveling glow halo behind the 5-bar equalizer
+            if (ampScale > 0.05f) {
+                val eqCenterX = posX + eqSpan * 0.5f
+                val haloR = maxBarH * 1.15f
+                val haloAlpha = (alpha * 0.24f * ampScale).toInt().coerceIn(0, 255)
+                val haloCol = (accent and 0x00FFFFFF) or (haloAlpha shl 24)
+                val haloSh = if (cachedSoftMistColor == haloCol && cachedSoftMistShader != null) cachedSoftMistShader!! else {
+                    RadialGradient(0f, 0f, 1f, intArrayOf(haloCol, (accent and 0x00FFFFFF) or (((haloAlpha * 0.35f).toInt()) shl 24), Color.TRANSPARENT), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+                        .also { cachedSoftMistColor = haloCol; cachedSoftMistShader = it }
+                }
+                shaderMatrix.reset(); shaderMatrix.setScale(haloR * 1.4f, haloR); shaderMatrix.postTranslate(eqCenterX, centerY)
+                haloSh.setLocalMatrix(shaderMatrix)
+                orbPaint.shader = haloSh
+                backdropRect.set(eqCenterX - haloR * 1.4f, centerY - haloR, eqCenterX + haloR * 1.4f, centerY + haloR)
+                canvas.drawOval(backdropRect, orbPaint)
+                orbPaint.shader = null
             }
 
             // 5-Bar Breathing Equalizer sitting at current song timestamp
