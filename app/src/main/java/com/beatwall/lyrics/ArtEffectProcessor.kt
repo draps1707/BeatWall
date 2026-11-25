@@ -61,7 +61,7 @@ class ArtEffectProcessor {
         SkyAnchor(240, 0xFF3730A3.toInt(), 0xFF1E1B4B.toInt(), 0xFFA5B4FC.toInt()),
         SkyAnchor(390, 0xFFD97706.toInt(), 0xFF7C2D12.toInt(), 0xFFFDBA74.toInt()),
         SkyAnchor(570, 0xFF0D9488.toInt(), 0xFF134E4A.toInt(), 0xFF5EEAD4.toInt()),
-        SkyAnchor(810, 0xFF2563EB.toInt(), 0xFF1E293B.toInt(), 0xFF7DD3FC.toInt()),
+        SkyAnchor(810, 0xFF0284C7.toInt(), 0xFF1D4ED8.toInt(), 0xFFBAE6FD.toInt()),
         SkyAnchor(1050, 0xFFC2410C.toInt(), 0xFF701A75.toInt(), 0xFFFDA4AF.toInt()),
         SkyAnchor(1170, 0xFF6D28D9.toInt(), 0xFF1E1B4B.toInt(), 0xFFC4B5FD.toInt()),
         SkyAnchor(1320, 0xFF1E3A8A.toInt(), 0xFF065F46.toInt(), 0xFF6EE7B7.toInt())
@@ -95,33 +95,34 @@ class ArtEffectProcessor {
         val timeAccent = ColorUtils.blendARGB(a.accent, b.accent, t)
 
         val biome = NatureBiomes.getBlendedBiome(dayOfMonth, minuteOfDay)
-        // Daytime: Time-of-Day leads (75%) so afternoon is always crisp & bright; Night: Biome shines (55%)
-        val biomeWeight = if (isDay) 0.25f else 0.55f
+        // Daytime: Time-of-Day leads (80%) for bright natural atmosphere; Night: Biome shines (52%)
+        val biomeWeight = if (isDay) 0.20f else 0.52f
         val zenith = ColorUtils.blendARGB(timeSecondary, biome.zenith, biomeWeight)
         val midSky = ColorUtils.blendARGB(timePrimary, biome.midSky, biomeWeight)
         val paleHorizon = if (isDay) {
-            ColorUtils.blendARGB(ColorUtils.blendARGB(midSky, 0xFFBAE6FD.toInt(), 0.35f), biome.horizon, 0.22f)
+            ColorUtils.blendARGB(ColorUtils.blendARGB(midSky, 0xFFE0F2FE.toInt(), 0.45f), biome.horizon, 0.16f)
         } else {
-            ColorUtils.blendARGB(timeSecondary, biome.horizon, 0.45f)
+            ColorUtils.blendARGB(timeSecondary, biome.horizon, 0.42f)
         }
         val accent = ColorUtils.blendARGB(timeAccent, biome.accent, 0.35f)
 
+        // Sea mirrors the sky horizon & depth naturally
         val seaTop = if (isDay) {
-            ColorUtils.blendARGB(0xFF0E4D7A.toInt(), paleHorizon, 0.32f)
+            ColorUtils.blendARGB(paleHorizon, 0xFF0369A1.toInt(), 0.36f)
         } else {
-            ColorUtils.blendARGB(0xFF041022.toInt(), zenith, 0.35f)
+            ColorUtils.blendARGB(0xFF041022.toInt(), paleHorizon, 0.32f)
         }
         val seaDeep = if (isDay) {
-            ColorUtils.blendARGB(0xFF092B47.toInt(), biome.midSky, 0.25f)
+            ColorUtils.blendARGB(0xFF0C3659.toInt(), midSky, 0.22f)
         } else {
-            0xFF030814.toInt()
+            0xFF030712.toInt()
         }
         val wetSand = if (isDay) {
-            ColorUtils.blendARGB(0xFF2B2825.toInt(), paleHorizon, 0.16f)
+            ColorUtils.blendARGB(0xFF1F2024.toInt(), paleHorizon, 0.12f)
         } else {
-            0xFF090B10.toInt()
+            0xFF07090E.toInt()
         }
-        val shoreDark = if (isDay) 0xFF171618.toInt() else 0xFF050609.toInt()
+        val shoreDark = if (isDay) 0xFF121316.toInt() else 0xFF040508.toInt()
 
         val horizonY = circHeight * 0.66f
         val shoreY = circHeight * 0.85f

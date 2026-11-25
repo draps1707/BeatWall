@@ -136,6 +136,8 @@ class BeatWallService : WallpaperService() {
         private var cachedSpotlightShader: RadialGradient? = null
         private var cachedSweepKey = 0L
         private var cachedSweepShader: LinearGradient? = null
+        private var cachedSoftMistColor = 0
+        private var cachedSoftMistShader: RadialGradient? = null
 
         private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply {
             isDither = true
@@ -843,68 +845,90 @@ class BeatWallService : WallpaperService() {
                 canvas.drawPath(moonPath, orbPaint)
             }
 
-            // 3. Drifting Wispy Clouds & 2 Distant Gulls (Day & Evening only)
-            if (isDay) {
+            // Helper: cached unit RadialGradient for zero-alloc soft mist/clouds/reflections
+            fun drawSoftOval(cx: Float, cy: Float, rx: Float, ry: Float, colWithAlpha: Int) {
+                val sh = if (cachedSoftMistColor == colWithAlpha && cachedSoftMistShader != null) {
+                    cachedSoftMistShader!!
+                } else {
+                    RadialGradient(
+                        0f, 0f, 1f,
+                        intArrayOf(colWithAlpha, (colWithAlpha and 0x00FFFFFF) or (((Color.alpha(colWithAlpha) * 0.35f).toInt()) shl 24), Color.TRANSPARENT),
+                        floatArrayOf(0f, 0.55f, 1f),
+                        Shader.TileMode.CLAMP
+                    ).also {
+                        cachedSoftMistColor = colWithAlpha
+                        cachedSoftMistShader = it
+                    }
+                }
+                shaderMatrix.reset()
+                shaderMatrix.setScale(rx, ry)
+                shaderMatrix.postTranslate(cx, cy)
+                sh.setLocalMatrix(shaderMatrix)
+                orbPaint.shader = sh
+                backdropRect.set(cx - rx, cy - ry, cx + rx, cy + ry)
+                canvas.drawOval(backdropRect, orbPaint)
                 orbPaint.shader = null
-                orbPaint.color = Color.WHITE
+            }
+
+            // 3. Soft Organic Feathered Clouds (Day & Evening, zero pill shapes!) + 2 Distant Gulls
+            if (isDay) {
+                val cloudTint = ColorUtils.blendARGB(Color.WHITE, circ.horizonColor, 0.22f) and 0x00FFFFFF
                 for (c in 0 until 3) {
-                    val speed = 0.008f + c * 0.003f
-                    val cx = (((0.18f + c * 0.34f + (timeSec * speed).toFloat()) % 1.36f) - 0.18f) * width
-                    val cy = height * (0.25f + c * 0.11f)
-                    val cw = width * (0.28f + c * 0.05f)
-                    val ch = height * 0.016f
-                    orbPaint.alpha = (masterAlpha * (0.12f - c * 0.02f)).toInt().coerceIn(0, 255)
-                    backdropRect.set(cx - cw * 0.5f, cy - ch, cx + cw * 0.5f, cy + ch)
-                    canvas.drawRoundRect(backdropRect, ch, ch, orbPaint)
-                    backdropRect.set(cx - cw * 0.30f, cy - ch * 1.45f, cx + cw * 0.22f, cy + ch * 0.5f)
-                    canvas.drawRoundRect(backdropRect, ch, ch, orbPaint)
+                    val speed = 0.0028f + c * 0.0012f
+                    val cx = (((0.18f + c * 0.36f + (timeSec * speed).toFloat()) % 1.48f) - 0.24f) * width
+                    val cy = height * (0.26f + c * 0.11f)
+                    val baseAlpha = (masterAlpha * (0.16f - c * 0.03f)).toInt().coerceIn(0, 255)
+                    val col = cloudTint or (baseAlpha shl 24)
+                    drawSoftOval(cx, cy, width * 0.30f, height * 0.032f, col)
+                    drawSoftOval(cx - width * 0.10f, cy - height * 0.010f, width * 0.18f, height * 0.024f, col)
+                    drawSoftOval(cx + width * 0.11f, cy + height * 0.006f, width * 0.20f, height * 0.022f, col)
                 }
 
-                // 2 tiny distant V-gulls gliding slowly across the upper sky
-                baselinePaint.strokeWidth = density * 1.2f
+                // 2 tiny distant V-gulls gliding calmly across the upper sky
+                baselinePaint.strokeWidth = density * 1.15f
                 baselinePaint.color = 0xFF1E293B.toInt()
                 for (g in 0 until 2) {
-                    val gx = (((0.25f + g * 0.11f + (timeSec * 0.014).toFloat()) % 1.24f) - 0.12f) * width
-                    val gy = height * (0.31f + g * 0.026f) - sin(timeSec * 0.6 + g).toFloat() * (height * 0.008f)
-                    val span = width * (0.015f - g * 0.003f)
-                    val flap = sin(timeSec * 3.6 + g * 1.4).toFloat() * (span * 0.35f)
-                    baselinePaint.alpha = (masterAlpha * 0.42f).toInt()
+                    val gx = (((0.25f + g * 0.11f + (timeSec * 0.0085).toFloat()) % 1.24f) - 0.12f) * width
+                    val gy = height * (0.31f + g * 0.026f) - sin(timeSec * 0.5 + g).toFloat() * (height * 0.006f)
+                    val span = width * (0.014f - g * 0.003f)
+                    val flap = sin(timeSec * 3.0 + g * 1.4).toFloat() * (span * 0.34f)
+                    baselinePaint.alpha = (masterAlpha * 0.40f).toInt()
                     canvas.drawLine(gx - span, gy - flap, gx, gy + span * 0.22f, baselinePaint)
                     canvas.drawLine(gx, gy + span * 0.22f, gx + span, gy - flap, baselinePaint)
                 }
             }
 
-            // 4. Clean Horizon Line + Sun/Moon Shimmer Reflection on Sea
-            baselinePaint.strokeWidth = density * 0.9f
+            // 4. Clean Horizon Line + Continuous Shimmering Sun/Moon Water Reflection Column
+            baselinePaint.strokeWidth = density * 0.85f
             baselinePaint.color = Color.WHITE
-            baselinePaint.alpha = (masterAlpha * (if (isDay) 0.26f else 0.14f)).toInt()
+            baselinePaint.alpha = (masterAlpha * (if (isDay) 0.22f else 0.12f)).toInt()
             canvas.drawLine(0f, horizonY, width.toFloat(), horizonY, baselinePaint)
 
-            val shimColor = if (isDay) 0xFFFEF3C7.toInt() else 0xFFE2E8F0.toInt()
-            baselinePaint.color = shimColor
-            for (s in 0 until 7) {
-                val fracS = s / 6f
-                val sy = horizonY + (shoreY - horizonY) * (0.08f + fracS * 0.70f)
-                val sw = width * (0.06f + fracS * 0.10f) * (0.85f + 0.15f * sin(timeSec * 1.8 + s).toFloat())
-                val sx = orbX + sin(timeSec * 1.3 + s * 0.9).toFloat() * (width * 0.015f)
-                baselinePaint.strokeWidth = density * 1.2f
-                baselinePaint.alpha = (masterAlpha * (0.24f - fracS * 0.18f)).toInt().coerceIn(0, 255)
-                canvas.drawLine(sx - sw * 0.5f, sy, sx + sw * 0.5f, sy, baselinePaint)
+            val seaMidY = horizonY + (shoreY - horizonY) * 0.42f
+            val seaSpanY = (shoreY - horizonY) * 0.52f
+            val shimRgb = if (isDay) 0xFFFEF3C7.toInt() and 0x00FFFFFF else (circ.accent and 0x00FFFFFF)
+            val shimBreath = 0.88f + 0.12f * sin(timeSec * 0.9).toFloat()
+            val shimAlpha = (masterAlpha * (if (isDay) 0.22f else 0.14f) * shimBreath).toInt().coerceIn(0, 255)
+            drawSoftOval(orbX, seaMidY, width * 0.15f, seaSpanY, shimRgb or (shimAlpha shl 24))
+            // Soft horizontal water glints inside reflection column (feathered, never sticks)
+            for (r in 0 until 3) {
+                val ry = horizonY + (shoreY - horizonY) * (0.14f + r * 0.22f)
+                val rxShift = sin(timeSec * 0.7 + r * 1.5).toFloat() * (width * 0.025f)
+                val rAlpha = (masterAlpha * (0.12f - r * 0.02f)).toInt().coerceIn(0, 255)
+                drawSoftOval(orbX + rxShift, ry, width * (0.11f + r * 0.03f), height * 0.005f, shimRgb or (rAlpha shl 24))
             }
 
             // 5. Tiny Distant Sailboat Silhouette Drifting Slowly on the Sea
-            val boatX = (((0.20f + (timeSec * 0.0055).toFloat()) % 1.16f) - 0.08f) * width
-            val boatBob = sin(timeSec * 1.4).toFloat() * (density * 1.1f)
-            val boatY = horizonY + height * 0.014f + boatBob
+            val boatX = (((0.20f + (timeSec * 0.0035).toFloat()) % 1.16f) - 0.08f) * width
+            val boatBob = sin(timeSec * 1.1).toFloat() * (density * 0.9f)
+            val boatY = horizonY + height * 0.013f + boatBob
             val boatCol = if (isDay) 0xFF0F172A.toInt() else 0xFF020617.toInt()
             eqBarPaint.color = boatCol
-            eqBarPaint.alpha = (masterAlpha * 0.62f).toInt()
-            val bw = width * 0.026f
-            val bh = width * 0.022f
-            // Hull
-            eqBarRect.set(boatX - bw * 0.5f, boatY, boatX + bw * 0.5f, boatY + density * 2.4f)
+            eqBarPaint.alpha = (masterAlpha * 0.60f).toInt()
+            val bw = width * 0.025f
+            val bh = width * 0.021f
+            eqBarRect.set(boatX - bw * 0.5f, boatY, boatX + bw * 0.5f, boatY + density * 2.2f)
             canvas.drawRoundRect(eqBarRect, density, density, eqBarPaint)
-            // Sail triangle
             moonPath.reset()
             moonPath.moveTo(boatX - bw * 0.05f, boatY)
             moonPath.lineTo(boatX - bw * 0.05f, boatY - bh)
@@ -912,22 +936,17 @@ class BeatWallService : WallpaperService() {
             moonPath.close()
             canvas.drawPath(moonPath, eqBarPaint)
 
-            // 6. Gentle Rolling Seafoam Wave (Bioluminescent cyan-teal glow at night!)
-            val waveProg = ((timeSec * 0.11) % 1.0).toFloat()
-            val wy = horizonY + (shoreY - horizonY) * (0.22f + waveProg * 0.72f)
-            val waveAlpha = sin(waveProg * PI).toFloat() * (if (isDay) 0.42f else 0.28f)
-            baselinePaint.strokeWidth = density * 1.6f
-            baselinePaint.color = if (isDay) Color.WHITE else 0xFF22D3EE.toInt()
-            baselinePaint.alpha = (masterAlpha * waveAlpha).toInt().coerceIn(0, 255)
-            moonPath.reset()
-            val steps = 28
-            for (k in 0..steps) {
-                val fx = k.toFloat() / steps
-                val wx = fx * width
-                val dy = sin(fx * 2.2 * PI + timeSec * 0.9).toFloat() * (height * 0.006f)
-                if (k == 0) moonPath.moveTo(wx, wy + dy) else moonPath.lineTo(wx, wy + dy)
+            // 6. Calm, Slow, Feathered Ocean Swells (~28 seconds per gentle swell, zero hard wires!)
+            val swellRgb = if (isDay) 0x00E0F2FE else 0x0022D3EE
+            for (wIdx in 0 until 2) {
+                val waveProg = (((timeSec * 0.036) + wIdx * 0.5) % 1.0).toFloat()
+                val wy = horizonY + (shoreY - horizonY) * (0.16f + waveProg * 0.80f)
+                val waveAlpha = sin(waveProg * PI).toFloat() * (if (isDay) 0.16f else 0.12f)
+                val wAlphaInt = (masterAlpha * waveAlpha).toInt().coerceIn(0, 255)
+                if (wAlphaInt > 2) {
+                    drawSoftOval(width * 0.5f, wy, width * 0.72f, height * 0.014f, swellRgb or (wAlphaInt shl 24))
+                }
             }
-            canvas.drawPath(moonPath, baselinePaint)
         }
 
         private fun drawNotebookTwoHostStudio(
@@ -1121,13 +1140,15 @@ class BeatWallService : WallpaperService() {
                 headerArtistPaint
             )
 
-            // Option 2: 5-Bar Micro Silk Equalizer on left + calm hairline
+            // Option 2: Traveling 5-Bar Micro Silk Equalizer along song timeline
+            val progFrac = if (state.durationMs > 0L) state.progressFraction() else 0f
             drawMicroSilkEqualizer(
                 canvas = canvas,
                 timeSec = timeSec,
                 startX = textLeft,
                 centerY = artistBaselineY + eqRowOffset,
                 totalW = maxTextW,
+                progressFrac = progFrac,
                 ampScale = eqAmp,
                 accent = accent,
                 alpha = headerAlpha
@@ -1140,19 +1161,32 @@ class BeatWallService : WallpaperService() {
             startX: Float,
             centerY: Float,
             totalW: Float,
+            progressFrac: Float,
             ampScale: Float,
             accent: Int,
             alpha: Int
         ) {
             val barCount = 5
             val barW = width * 0.0046f
-            val barGap = width * 0.011f
+            val barGap = width * 0.0105f
             val maxBarH = width * 0.019f
-            val eqSpan = barCount * barGap
+            val eqSpan = (barCount - 1) * barGap + barW
+            val padGap = width * 0.010f
+            val posX = startX + (totalW - eqSpan).coerceAtLeast(0f) * progressFrac.coerceIn(0f, 1f)
 
+            baselinePaint.strokeWidth = width * 0.0026f
+            baselinePaint.color = accent
+
+            // Played line behind the 5 bars
+            val playedEnd = posX - padGap
+            if (playedEnd > startX + 2f) {
+                baselinePaint.alpha = (alpha * 0.62f).toInt().coerceIn(0, 255)
+                canvas.drawLine(startX, centerY, playedEnd, centerY, baselinePaint)
+            }
+
+            // 5-Bar Equalizer sitting at current song timestamp
             eqBarPaint.color = accent
-            eqBarPaint.alpha = (alpha * (0.42f + 0.50f * ampScale)).toInt().coerceIn(0, 255)
-
+            eqBarPaint.alpha = (alpha * (0.45f + 0.50f * ampScale)).toInt().coerceIn(0, 255)
             for (b in 0 until barCount) {
                 val wave = if (ampScale > 0.01f) {
                     0.25f + 0.75f * ((sin(timeSec * 3.8 + b * 0.95) + 1.0) * 0.5).toFloat()
@@ -1160,17 +1194,16 @@ class BeatWallService : WallpaperService() {
                     0f
                 }
                 val bh = barW + (maxBarH - barW) * wave * ampScale
-                val bx = startX + b * barGap
+                val bx = posX + b * barGap
                 eqBarRect.set(bx, centerY - bh * 0.5f, bx + barW, centerY + bh * 0.5f)
                 canvas.drawRoundRect(eqBarRect, barW * 0.5f, barW * 0.5f, eqBarPaint)
             }
 
-            val lineStart = startX + eqSpan + width * 0.012f
-            if (lineStart < startX + totalW) {
-                baselinePaint.strokeWidth = width * 0.0026f
-                baselinePaint.color = accent
-                baselinePaint.alpha = (alpha * 0.24f).toInt().coerceIn(0, 255)
-                canvas.drawLine(lineStart, centerY, startX + totalW, centerY, baselinePaint)
+            // Unplayed hairline ahead of the 5 bars
+            val unplayedStart = posX + eqSpan + padGap
+            if (unplayedStart < startX + totalW - 2f) {
+                baselinePaint.alpha = (alpha * 0.22f).toInt().coerceIn(0, 255)
+                canvas.drawLine(unplayedStart, centerY, startX + totalW, centerY, baselinePaint)
             }
         }
 
