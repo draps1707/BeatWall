@@ -40,7 +40,8 @@ data class ActiveTrackState(
     val basePositionMs: Long,
     val lastUpdateElapsedMs: Long,
     val playbackSpeed: Float,
-    val isNotebookLm: Boolean = false
+    val isNotebookLm: Boolean = false,
+    val isFetchingLyrics: Boolean = false
 ) {
     fun currentPositionMs(nowElapsedMs: Long = SystemClock.elapsedRealtime()): Long {
         if (!isPlaying) return basePositionMs
@@ -339,7 +340,8 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
                     basePositionMs = basePos,
                     lastUpdateElapsedMs = updateElapsed,
                     playbackSpeed = speed,
-                    isNotebookLm = isNotebook
+                    isNotebookLm = isNotebook,
+                    isFetchingLyrics = !isNotebook
                 )
                 notifyListeners(currentState)
             }
@@ -367,7 +369,8 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
                 )
                 currentState = latest.copy(
                     lyrics = lyrics,
-                    showLyrics = lyrics.isNotEmpty()
+                    showLyrics = lyrics.isNotEmpty(),
+                    isFetchingLyrics = false
                 )
                 notifyListeners(currentState)
             }

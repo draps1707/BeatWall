@@ -253,6 +253,74 @@
                         android:layout_marginStart="8dp"
                         android:text="Set" />
                 </LinearLayout>
+
+                <!-- Time-Travel Sky Preview Row -->
+                <HorizontalScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/btnPrevLive"
+                            style="@style/Widget.Material3.Button.TonalButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:minWidth="0dp"
+                            android:paddingHorizontal="12dp"
+                            android:text="Live"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnPrevDawn"
+                            style="@style/Widget.Material3.Button.TonalButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:layout_marginStart="6dp"
+                            android:minWidth="0dp"
+                            android:paddingHorizontal="12dp"
+                            android:text="Dawn"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnPrevNoon"
+                            style="@style/Widget.Material3.Button.TonalButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:layout_marginStart="6dp"
+                            android:minWidth="0dp"
+                            android:paddingHorizontal="12dp"
+                            android:text="Noon"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnPrevSunset"
+                            style="@style/Widget.Material3.Button.TonalButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:layout_marginStart="6dp"
+                            android:minWidth="0dp"
+                            android:paddingHorizontal="12dp"
+                            android:text="Sunset"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnPrevNight"
+                            style="@style/Widget.Material3.Button.TonalButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:layout_marginStart="6dp"
+                            android:minWidth="0dp"
+                            android:paddingHorizontal="12dp"
+                            android:text="Night"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                </HorizontalScrollView>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

@@ -13,6 +13,7 @@ object LocationStore {
     private const val KEY_LAT = "loc_lat"
     private const val KEY_LON = "loc_lon"
     private const val KEY_CITY = "loc_city"
+    private const val KEY_PREVIEW_HOUR = "sky_preview_hour"
 
     // Default: Sector 5, Rourkela, Odisha (769002)
     private const val DEFAULT_LAT = 22.2604
@@ -34,6 +35,17 @@ object LocationStore {
             .putString(KEY_LAT, lat.toString())
             .putString(KEY_LON, lon.toString())
             .putString(KEY_CITY, cityName)
+            .apply()
+    }
+
+    fun getPreviewHour(context: Context): Int {
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt(KEY_PREVIEW_HOUR, -1)
+    }
+
+    fun setPreviewHour(context: Context, hour: Int) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putInt(KEY_PREVIEW_HOUR, hour)
             .apply()
     }
 }

@@ -20,6 +20,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import java.util.Calendar
 import java.util.Locale
 import kotlin.concurrent.thread
 import kotlin.math.roundToInt
@@ -87,6 +88,13 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
                 geocodeCityName(query)
             }
         }
+
+        findViewById<Button>(R.id.btnPrevLive).setOnClickListener { setPreviewHour(-1, "Live Sky") }
+        findViewById<Button>(R.id.btnPrevDawn).setOnClickListener { setPreviewHour(6, "Dawn (6 AM)") }
+        findViewById<Button>(R.id.btnPrevNoon).setOnClickListener { setPreviewHour(13, "Noon (1 PM)") }
+        findViewById<Button>(R.id.btnPrevSunset).setOnClickListener { setPreviewHour(17, "Sunset (5 PM)") }
+        findViewById<Button>(R.id.btnPrevNight).setOnClickListener { setPreviewHour(22, "Night (10 PM)") }
+
         btnSetWallpaper.setOnClickListener {
             val intent = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
                 putExtra(
@@ -96,6 +104,12 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
             }
             startActivity(intent)
         }
+    }
+
+    private fun setPreviewHour(hour: Int, label: String) {
+        LocationStore.setPreviewHour(this, hour)
+        refreshSkyCard()
+        Toast.makeText(this, "Wallpaper preview: $label", Toast.LENGTH_SHORT).show()
     }
 
     override fun onResume() {
@@ -108,6 +122,11 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
     override fun onPause() {
         MediaSessionTracker.getInstance(applicationContext).removeListener(this)
         super.onPause()
+    }
+
+    override fun onDestroy() {
+        LocationStore.setPreviewHour(this, -1)
+        super.onDestroy()
     }
 
     override fun onTrackStateChanged(state: ActiveTrackState?) {
@@ -132,13 +151,24 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
 
     private fun refreshSkyCard() {
         val loc = LocationStore.load(this)
-        val snap = SkyAstronomy.compute(System.currentTimeMillis(), loc.lat, loc.lon)
-        txtLocationCity.text = loc.cityName
+        val prevHour = LocationStore.getPreviewHour(this)
+        val targetMs = if (prevHour >= 0) {
+            Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, prevHour)
+                set(Calendar.MINUTE, 15)
+            }.timeInMillis
+        } else {
+            System.currentTimeMillis()
+        }
+        val snap = SkyAstronomy.compute(targetMs, loc.lat, loc.lon)
+        val weather = WeatherClient.getCachedOrRefresh(this, loc.lat, loc.lon)
+        txtLocationCity.text = if (prevHour >= 0) "${loc.cityName} (Preview ${prevHour}:15)" else loc.cityName
         val rise = SkyAstronomy.formatDecimalHour(snap.sunriseLocalHours)
         val set = SkyAstronomy.formatDecimalHour(snap.sunsetLocalHours)
         val moonPct = (snap.moonIllumination * 100f).roundToInt()
         val sunAlt = snap.sunAltDeg.roundToInt()
-        txtSkyMetrics.text = "Sun $sunAlt° • Rise $rise • Set $set • Moon $moonPct%"
+        val wTag = weather.name.lowercase().replaceFirstChar { it.uppercase() }
+        txtSkyMetrics.text = "$wTag • Sun $sunAlt° • Rise $rise • Set $set • Moon $moonPct%"
     }
 
     @Suppress("MissingPermission")

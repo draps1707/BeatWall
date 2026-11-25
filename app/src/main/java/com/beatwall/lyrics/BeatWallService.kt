@@ -114,14 +114,28 @@ class BeatWallService : WallpaperService() {
         private var cachedSkySnapshot: SkySnapshot? = null
         private var lastSkyComputeMs = 0L
 
+        private fun effectiveTimeMillisAndMinute(): Pair<Long, Int> {
+            val prevHour = LocationStore.getPreviewHour(applicationContext)
+            if (prevHour >= 0) {
+                val cal = Calendar.getInstance().apply {
+                    set(Calendar.HOUR_OF_DAY, prevHour)
+                    set(Calendar.MINUTE, 15)
+                }
+                return cal.timeInMillis to (prevHour * 60 + 15)
+            }
+            return System.currentTimeMillis() to currentMinuteOfDay()
+        }
+
         private fun getSkySnapshot(): SkySnapshot {
+            val prevHour = LocationStore.getPreviewHour(applicationContext)
             val nowMs = System.currentTimeMillis()
             val existing = cachedSkySnapshot
-            if (existing != null && kotlin.math.abs(nowMs - lastSkyComputeMs) < 30_000L) {
+            if (prevHour < 0 && existing != null && kotlin.math.abs(nowMs - lastSkyComputeMs) < 30_000L) {
                 return existing
             }
             val loc = LocationStore.load(applicationContext)
-            return SkyAstronomy.compute(nowMs, loc.lat, loc.lon).also {
+            val (targetMs, _) = effectiveTimeMillisAndMinute()
+            return SkyAstronomy.compute(targetMs, loc.lat, loc.lon).also {
                 cachedSkySnapshot = it
                 lastSkyComputeMs = nowMs
             }
@@ -722,11 +736,14 @@ class BeatWallService : WallpaperService() {
 
             if (state == null) {
                 val sky = getSkySnapshot()
-                val circ = artProcessor.getCircadianTheme(currentDayOfMonth(), currentMinuteOfDay(), sky.sunAltDeg)
+                val (_, effMin) = effectiveTimeMillisAndMinute()
+                val circ = artProcessor.getCircadianTheme(currentDayOfMonth(), effMin, sky.sunAltDeg)
+                val loc = LocationStore.load(applicationContext)
+                val weather = WeatherClient.getCachedOrRefresh(applicationContext, loc.lat, loc.lon)
                 bmpPaint.alpha = masterAlpha
                 backdropRect.set(0f, 0f, width.toFloat(), height.toFloat())
                 canvas.drawBitmap(circ.backdrop, null, backdropRect, bmpPaint)
-                drawMotherEarthCircadianScene(canvas, circ, sky, isLock, timeSec, masterAlpha)
+                drawMotherEarthCircadianScene(canvas, circ, sky, weather, isLock, timeSec, masterAlpha)
                 return
             }
 
@@ -792,7 +809,7 @@ class BeatWallService : WallpaperService() {
                     masterAlpha = lyrAlpha,
                     frameTimeNanos = frameTimeNanos
                 )
-            } else if (!state.showLyrics || state.lyrics.isEmpty()) {
+            } else if (!state.isFetchingLyrics && (!state.showLyrics || state.lyrics.isEmpty())) {
                 drawInstrumentalStudio(canvas, state, lb, timeSec, accent, primary, masterAlpha)
             }
         }
@@ -814,6 +831,7 @@ class BeatWallService : WallpaperService() {
             canvas: Canvas,
             circ: CircadianTheme,
             sky: SkySnapshot,
+            weather: SkyWeather,
             isLock: Boolean,
             timeSec: Double,
             masterAlpha: Int
@@ -988,7 +1006,56 @@ class BeatWallService : WallpaperService() {
                 }
             }
 
+            // 3B. Golden-Hour Horizon Scatter (-6°..+8° Sun Altitude) & Weather Atmosphere
+            if (sky.sunAltDeg in -6f..8f) {
+                val ghStrength = (1f - kotlin.math.abs(sky.sunAltDeg - 1f) / 7f).coerceIn(0f, 1f)
+                val ghAlpha = (masterAlpha * 0.28f * ghStrength).toInt().coerceIn(0, 255)
+                val ghRgb = sky.sunCoronaColor and 0x00FFFFFF
+                drawSoftOval(sunX, horizonY, width * 0.72f, height * 0.085f, ghRgb or (ghAlpha shl 24))
+            }
+
+            if (weather == SkyWeather.CLOUDY || weather == SkyWeather.RAIN || weather == SkyWeather.THUNDERSTORM) {
+                val hazeAlpha = (masterAlpha * (if (weather == SkyWeather.CLOUDY) 0.16f else 0.12f)).toInt().coerceIn(0, 255)
+                drawSoftOval(width * 0.5f, horizonY - height * 0.04f, width * 0.85f, height * 0.09f, (0x00CBD5E1) or (hazeAlpha shl 24))
+            }
+
+            if (weather == SkyWeather.THUNDERSTORM) {
+                val flashPhase = timeSec % 18.0
+                if (flashPhase < 0.25) {
+                    val fEnv = sin((flashPhase / 0.25) * PI).toFloat()
+                    val fAlpha = (masterAlpha * 0.36f * fEnv).toInt().coerceIn(0, 255)
+                    drawSoftOval(width * 0.68f, height * 0.38f, width * 0.45f, height * 0.14f, (0x00E0F2FE) or (fAlpha shl 24))
+                }
+            }
+
+            if (weather == SkyWeather.RAIN || weather == SkyWeather.THUNDERSTORM) {
+                baselinePaint.strokeWidth = density * 0.9f
+                baselinePaint.color = 0xFFE2E8F0.toInt()
+                baselinePaint.alpha = (masterAlpha * 0.22f).toInt()
+                for (rIdx in 0 until 20) {
+                    val rProg = (((timeSec * 1.65) + rIdx * 0.19) % 1.0 + 1.0) % 1.0
+                    val rx = ((rIdx * 0.053f + 0.02f) % 1.0f) * width - (rProg.toFloat() * width * 0.04f)
+                    val ry = rProg.toFloat() * horizonY
+                    canvas.drawLine(rx, ry, rx - width * 0.012f, ry + height * 0.024f, baselinePaint)
+                }
+            }
+
             canvas.restore()
+
+            // Sea Raindrop Ripples during Rain/Thunderstorm
+            if (weather == SkyWeather.RAIN || weather == SkyWeather.THUNDERSTORM) {
+                baselinePaint.strokeWidth = density * 0.8f
+                baselinePaint.color = 0xFFBAE6FD.toInt()
+                for (rp in 0 until 4) {
+                    val rpProg = (((timeSec * 0.55) + rp * 0.25) % 1.0).toFloat()
+                    val rx = width * (0.18f + rp * 0.21f)
+                    val ry = horizonY + (shoreY - horizonY) * (0.28f + (rp % 2) * 0.30f)
+                    val rad = width * (0.01f + rpProg * 0.035f)
+                    baselinePaint.alpha = (masterAlpha * 0.24f * (1f - rpProg)).toInt().coerceIn(0, 255)
+                    backdropRect.set(rx - rad, ry - rad * 0.28f, rx + rad, ry + rad * 0.28f)
+                    canvas.drawOval(backdropRect, baselinePaint)
+                }
+            }
 
             // 4. Clean Horizon Line + Continuous Shimmering Sun/Moon Water Reflection Column
             baselinePaint.strokeWidth = density * 0.85f
