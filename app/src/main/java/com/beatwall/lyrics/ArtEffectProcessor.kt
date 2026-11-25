@@ -30,11 +30,14 @@ data class ProcessedArt(
 )
 
 data class CircadianTheme(
+    val dayKey: Int,
     val minuteKey: Int,
     val backdrop: Bitmap,
     val primary: Int,
     val secondary: Int,
-    val accent: Int
+    val accent: Int,
+    val horizonColor: Int,
+    val particleKind: Int
 )
 
 class ArtEffectProcessor {
@@ -78,51 +81,110 @@ class ArtEffectProcessor {
         shader = BitmapShader(grainBmp, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
     }
 
-    fun getCircadianTheme(minuteOfDay: Int): CircadianTheme {
+    fun getCircadianTheme(dayOfMonth: Int, minuteOfDay: Int): CircadianTheme {
         val existing = cachedCircadianTheme
-        if (existing != null && abs(minuteOfDay - existing.minuteKey) < 10) {
+        val refreshWindow = if (minuteOfDay >= 1430 || minuteOfDay <= 10) 4 else 10
+        if (existing != null && existing.dayKey == dayOfMonth && abs(minuteOfDay - existing.minuteKey) < refreshWindow) {
             return existing
         }
 
         val (a, b, t) = findSkyBrackets(minuteOfDay)
-        val primary = ColorUtils.blendARGB(a.primary, b.primary, t)
-        val secondary = ColorUtils.blendARGB(a.secondary, b.secondary, t)
-        val accent = ColorUtils.blendARGB(a.accent, b.accent, t)
+        val timePrimary = ColorUtils.blendARGB(a.primary, b.primary, t)
+        val timeSecondary = ColorUtils.blendARGB(a.secondary, b.secondary, t)
+        val timeAccent = ColorUtils.blendARGB(a.accent, b.accent, t)
+
+        val biome = NatureBiomes.getBlendedBiome(dayOfMonth, minuteOfDay)
+        val zenith = ColorUtils.blendARGB(biome.zenith, timeSecondary, 0.30f)
+        val midSky = ColorUtils.blendARGB(biome.midSky, timePrimary, 0.42f)
+        val horizon = ColorUtils.blendARGB(biome.horizon, timePrimary, 0.28f)
+        val accent = ColorUtils.blendARGB(biome.accent, timeAccent, 0.35f)
+        val deepBase = ColorUtils.blendARGB(zenith, 0xFF040509.toInt(), 0.65f)
 
         val canvas = Canvas(circadianBitmap)
-        canvas.drawColor(0xFF060810.toInt())
+        val skyPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
+            shader = LinearGradient(
+                0f, 0f, 0f, circHeight.toFloat(),
+                intArrayOf(zenith, midSky, horizon, deepBase),
+                floatArrayOf(0f, 0.42f, 0.76f, 1f),
+                Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), skyPaint)
 
         val g1 = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
             shader = RadialGradient(
-                circWidth * 0.28f, circHeight * 0.30f, circWidth * 1.1f,
-                intArrayOf(withAlpha(primary, 210), Color.TRANSPARENT),
+                circWidth * 0.26f, circHeight * 0.32f, circWidth * 1.05f,
+                intArrayOf(withAlpha(midSky, 175), Color.TRANSPARENT),
                 null, Shader.TileMode.CLAMP
             )
         }
         val g2 = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
             shader = RadialGradient(
-                circWidth * 0.76f, circHeight * 0.68f, circWidth * 1.1f,
-                intArrayOf(withAlpha(secondary, 200), Color.TRANSPARENT),
+                circWidth * 0.76f, circHeight * 0.72f, circWidth * 1.10f,
+                intArrayOf(withAlpha(horizon, 165), Color.TRANSPARENT),
                 null, Shader.TileMode.CLAMP
             )
         }
         canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), g1)
         canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), g2)
-
-        val vignettePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
-            shader = LinearGradient(
-                0f, 0f, 0f, circHeight.toFloat(),
-                intArrayOf(0x88040508.toInt(), 0x18000000, 0x18000000, 0xAA040508.toInt()),
-                floatArrayOf(0f, 0.28f, 0.72f, 1f),
-                Shader.TileMode.CLAMP
-            )
-        }
-        canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), vignettePaint)
         canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), grainPaint)
 
-        return CircadianTheme(minuteOfDay, circadianBitmap, primary, secondary, accent).also {
+        return CircadianTheme(
+            dayKey = dayOfMonth,
+            minuteKey = minuteOfDay,
+            backdrop = circadianBitmap,
+            primary = midSky,
+            secondary = zenith,
+            accent = accent,
+            horizonColor = horizon,
+            particleKind = biome.particleKind
+        ).also {
             cachedCircadianTheme = it
         }
+    }
+
+    fun processNotebookStudioFallback(): ProcessedArt {
+        val cover = Bitmap.createBitmap(360, 360, Bitmap.Config.ARGB_8888)
+        val c = Canvas(cover)
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
+            shader = LinearGradient(
+                0f, 0f, 360f, 360f,
+                intArrayOf(0xFF0F172A.toInt(), 0xFF1E1B4B.toInt(), 0xFF0E7490.toInt()),
+                null, Shader.TileMode.CLAMP
+            )
+        }
+        c.drawRect(0f, 0f, 360f, 360f, bgPaint)
+        val orbA = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = RadialGradient(135f, 180f, 110f, intArrayOf(0xCC38BDF8.toInt(), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        }
+        val orbB = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = RadialGradient(225f, 180f, 110f, intArrayOf(0xCC818CF8.toInt(), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        }
+        c.drawCircle(135f, 180f, 110f, orbA)
+        c.drawCircle(225f, 180f, 110f, orbB)
+
+        val targetSlot = pool[poolIdx]
+        poolIdx = (poolIdx + 1) % pool.size
+        val bc = Canvas(targetSlot)
+        bc.drawColor(0xFF050814.toInt())
+        val g1 = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
+            shader = RadialGradient(blurWidth * 0.30f, blurHeight * 0.36f, blurWidth * 1.0f, intArrayOf(0xA00E7490.toInt(), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        }
+        val g2 = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
+            shader = RadialGradient(blurWidth * 0.72f, blurHeight * 0.62f, blurWidth * 1.0f, intArrayOf(0xA0312E81.toInt(), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        }
+        bc.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), g1)
+        bc.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), g2)
+        bc.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), grainPaint)
+        cover.setHasMipMap(true)
+
+        return ProcessedArt(
+            coverArt = cover,
+            blurredBackdrop = targetSlot,
+            primaryGlowColor = 0xFF38BDF8.toInt(),
+            secondaryGlowColor = 0xFF312E81.toInt(),
+            lyricAccentColor = 0xFF7DD3FC.toInt()
+        )
     }
 
     private fun findSkyBrackets(minuteOfDay: Int): Triple<SkyAnchor, SkyAnchor, Float> {

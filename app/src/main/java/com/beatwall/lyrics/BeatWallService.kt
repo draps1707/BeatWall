@@ -280,6 +280,15 @@ class BeatWallService : WallpaperService() {
             targetNoteAmp = if (activeState?.isPlaying == true && !isLowBattery) 1f else 0f
         }
 
+        private val studioTimerPaint = TextPaint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
+            color = 0xCCFFFFFF.toInt()
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            textAlign = Paint.Align.CENTER
+            letterSpacing = 0.08f
+        }
+
+        private fun currentDayOfMonth(): Int = Calendar.getInstance().get(Calendar.DAY_OF_MONTH)
+
         private fun currentMinuteOfDay(): Int {
             val cal = Calendar.getInstance()
             return cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
@@ -295,7 +304,7 @@ class BeatWallService : WallpaperService() {
                     WallpaperColors.HINT_SUPPORTS_DARK_THEME
                 )
             }
-            val circ = artProcessor.getCircadianTheme(currentMinuteOfDay())
+            val circ = artProcessor.getCircadianTheme(currentDayOfMonth(), currentMinuteOfDay())
             return WallpaperColors(
                 Color.valueOf(circ.accent),
                 Color.valueOf(circ.primary),
@@ -665,13 +674,13 @@ class BeatWallService : WallpaperService() {
             val timeSec = frameTimeNanos / 1_000_000_000.0
 
             if (state == null) {
+                val dayOfMonth = currentDayOfMonth()
                 val minOfDay = currentMinuteOfDay()
-                val circ = artProcessor.getCircadianTheme(minOfDay)
+                val circ = artProcessor.getCircadianTheme(dayOfMonth, minOfDay)
                 drawBreathingBackdrop(canvas, circ.backdrop, !isLowBattery, timeSec, masterAlpha)
-                if (minOfDay !in 360..1080) {
-                    drawNightStarfield(canvas, timeSec, masterAlpha)
-                }
-                if (!isLock && !isLowBattery) {
+                drawAtmosphericHorizonMist(canvas, circ.horizonColor, circ.accent, timeSec, masterAlpha)
+                drawCircadianBiomeParticles(canvas, circ.particleKind, minOfDay, circ.accent, timeSec, masterAlpha)
+                if (!isLowBattery) {
                     proceduralAnimator.draw(
                         canvas = canvas,
                         width = width,
@@ -714,6 +723,11 @@ class BeatWallService : WallpaperService() {
             val headerAlpha = (masterAlpha * headerFactor).toInt().coerceIn(0, 255)
             drawUnifiedCompactHeader(canvas, state, art, headerTop, timeSec, accent, primary, headerAlpha)
 
+            if (state.isNotebookLm) {
+                drawNotebookTwoHostStudio(canvas, state, isLock, timeSec, masterAlpha)
+                return
+            }
+
             val isCurrent = state === activeState
             val lyrAlpha = (masterAlpha * (if (isCurrent) lyricsAlpha else prevLyricsAlpha)).toInt().coerceIn(0, 255)
             val layouts = if (isCurrent) centeredLayouts else prevCenteredLayouts
@@ -741,13 +755,94 @@ class BeatWallService : WallpaperService() {
             }
         }
 
-        private fun drawNightStarfield(canvas: Canvas, timeSec: Double, masterAlpha: Int) {
+        private fun drawAtmosphericHorizonMist(
+            canvas: Canvas,
+            horizonColor: Int,
+            accent: Int,
+            timeSec: Double,
+            masterAlpha: Int
+        ) {
+            val drift1 = sin(timeSec * 0.12).toFloat() * (width * 0.12f)
+            val drift2 = cos(timeSec * 0.09).toFloat() * (width * 0.14f)
+            val r1 = width * 0.78f
+            val r2 = width * 0.68f
+
+            orbPaint.shader = RadialGradient(
+                width * 0.30f + drift1, height * 0.78f, r1,
+                intArrayOf((horizonColor and 0x00FFFFFF) or (((masterAlpha * 0.32f).toInt()) shl 24), Color.TRANSPARENT),
+                null, Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(width * 0.30f + drift1, height * 0.78f, r1, orbPaint)
+
+            orbPaint.shader = RadialGradient(
+                width * 0.72f + drift2, height * 0.70f, r2,
+                intArrayOf((accent and 0x00FFFFFF) or (((masterAlpha * 0.18f).toInt()) shl 24), Color.TRANSPARENT),
+                null, Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(width * 0.72f + drift2, height * 0.70f, r2, orbPaint)
             orbPaint.shader = null
-            orbPaint.color = Color.WHITE
-            for (i in 0 until starCount) {
-                val twinkle = 0.35f + 0.65f * ((sin(timeSec * 1.1 + starPhase[i]) + 1.0) * 0.5).toFloat()
-                orbPaint.alpha = (masterAlpha * 0.38f * twinkle).toInt().coerceIn(0, 255)
-                canvas.drawCircle(starX[i] * width, starY[i] * height, starR[i] * (density * 0.42f), orbPaint)
+        }
+
+        private fun drawCircadianBiomeParticles(
+            canvas: Canvas,
+            particleKind: Int,
+            minuteOfDay: Int,
+            accent: Int,
+            timeSec: Double,
+            masterAlpha: Int
+        ) {
+            val isNight = minuteOfDay !in 360..1080
+            if (isNight || particleKind == 0 || particleKind == 4) {
+                orbPaint.shader = null
+                orbPaint.color = Color.WHITE
+                val starAlphaScale = if (isNight) 0.42f else 0.12f
+                for (i in 0 until starCount) {
+                    val twinkle = 0.35f + 0.65f * ((sin(timeSec * 1.1 + starPhase[i]) + 1.0) * 0.5).toFloat()
+                    orbPaint.alpha = (masterAlpha * starAlphaScale * twinkle).toInt().coerceIn(0, 255)
+                    canvas.drawCircle(starX[i] * width, starY[i] * height, starR[i] * (density * 0.42f), orbPaint)
+                }
+            }
+
+            if (isNight && (particleKind == 0 || particleKind == 4)) {
+                val period = if (particleKind == 4) 10.0 else 28.0
+                val phase = (timeSec % period)
+                if (phase < 0.75) {
+                    val prog = (phase / 0.75).toFloat()
+                    val sx = width * (0.78f - prog * 0.42f)
+                    val sy = height * (0.12f + prog * 0.18f)
+                    val ex = sx + width * 0.09f * (1f - prog * 0.3f)
+                    val ey = sy - height * 0.04f * (1f - prog * 0.3f)
+                    val fade = sin(prog * PI).toFloat()
+                    baselinePaint.strokeWidth = density * 1.3f
+                    baselinePaint.color = Color.WHITE
+                    baselinePaint.alpha = (masterAlpha * 0.75f * fade).toInt().coerceIn(0, 255)
+                    canvas.drawLine(sx, sy, ex, ey, baselinePaint)
+                }
+            }
+
+            if (particleKind in 1..3) {
+                val count = 14
+                val col = when (particleKind) {
+                    1 -> 0xFF5EEAD4.toInt()
+                    2 -> 0xFFFDE047.toInt()
+                    else -> accent
+                }
+                for (i in 0 until count) {
+                    val speed = 0.022 + (i % 4) * 0.006
+                    val prog = (((timeSec * speed) + i * 0.17) % 1.0 + 1.0) % 1.0
+                    val py = height * (0.86f - prog.toFloat() * 0.72f)
+                    val px = width * (0.10f + (i * 0.80f / count)) + sin(timeSec * 0.9 + i * 1.3).toFloat() * (width * 0.04f)
+                    val pr = width * (0.012f + (i % 3) * 0.005f)
+                    val env = sin(prog * PI).toFloat()
+                    val pAlpha = (masterAlpha * 0.28f * env).toInt().coerceIn(0, 255)
+                    orbPaint.shader = RadialGradient(
+                        px, py, pr,
+                        intArrayOf((col and 0x00FFFFFF) or (pAlpha shl 24), Color.TRANSPARENT),
+                        null, Shader.TileMode.CLAMP
+                    )
+                    canvas.drawCircle(px, py, pr, orbPaint)
+                }
+                orbPaint.shader = null
             }
         }
 
@@ -772,7 +867,7 @@ class BeatWallService : WallpaperService() {
             val orbY = if (isLock) {
                 height * (0.135f - 0.055f * arcLift)
             } else {
-                height * (0.23f - 0.11f * arcLift)
+                height * (0.21f - 0.10f * arcLift)
             }
 
             val baseOrbColor = if (isCharging) {
@@ -784,13 +879,13 @@ class BeatWallService : WallpaperService() {
             }
 
             val pulse = if (isCharging) 0.75f + 0.25f * sin(timeSec * 2.2).toFloat() else 1f
-            val glowR = width * 0.085f
+            val glowR = width * 0.12f
 
             orbPaint.shader = RadialGradient(
                 orbX, orbY, glowR,
                 intArrayOf(
-                    (baseOrbColor and 0x00FFFFFF) or (((masterAlpha * 0.48f * pulse).toInt()) shl 24),
-                    (baseOrbColor and 0x00FFFFFF) or (((masterAlpha * 0.14f * pulse).toInt()) shl 24),
+                    (baseOrbColor and 0x00FFFFFF) or (((masterAlpha * 0.52f * pulse).toInt()) shl 24),
+                    (baseOrbColor and 0x00FFFFFF) or (((masterAlpha * 0.18f * pulse).toInt()) shl 24),
                     Color.TRANSPARENT
                 ),
                 null, Shader.TileMode.CLAMP
@@ -799,11 +894,20 @@ class BeatWallService : WallpaperService() {
             orbPaint.shader = null
 
             if (isDay) {
+                // Multi-layered Solar Corona + Crisp Solar Disc
+                orbPaint.color = 0xFFFDE68A.toInt()
+                orbPaint.alpha = (masterAlpha * 0.35f).toInt()
+                canvas.drawCircle(orbX, orbY, width * 0.032f, orbPaint)
                 orbPaint.color = 0xFFFEF3C7.toInt()
-                orbPaint.alpha = (masterAlpha * 0.90f).toInt()
-                canvas.drawCircle(orbX, orbY, width * 0.017f, orbPaint)
+                orbPaint.alpha = (masterAlpha * 0.94f).toInt()
+                canvas.drawCircle(orbX, orbY, width * 0.019f, orbPaint)
             } else {
-                val r = width * 0.022f
+                val r = width * 0.024f
+                // Subtle earthshine on dark side of the Moon
+                orbPaint.color = Color.WHITE
+                orbPaint.alpha = (masterAlpha * 0.12f).toInt()
+                canvas.drawCircle(orbX, orbY, r, orbPaint)
+
                 moonPath.reset()
                 moonPath.addCircle(orbX, orbY, r, Path.Direction.CW)
                 moonCutPath.reset()
@@ -811,9 +915,70 @@ class BeatWallService : WallpaperService() {
                 moonPath.op(moonCutPath, Path.Op.DIFFERENCE)
 
                 orbPaint.color = Color.WHITE
-                orbPaint.alpha = (masterAlpha * 0.90f).toInt()
+                orbPaint.alpha = (masterAlpha * 0.94f).toInt()
                 canvas.drawPath(moonPath, orbPaint)
             }
+        }
+
+        private fun drawNotebookTwoHostStudio(
+            canvas: Canvas,
+            state: ActiveTrackState,
+            isLock: Boolean,
+            timeSec: Double,
+            masterAlpha: Int
+        ) {
+            val isPlaying = state.isPlaying && !isLowBattery
+            val cy = if (isLock) height * 0.55f else height * 0.48f
+            val cx = width * 0.50f
+            val sep = width * 0.11f
+
+            // Alternating Two-Host Conversation Orbs (Cyan Host A + Indigo Host B)
+            val turnA = if (isPlaying) 0.55f + 0.45f * sin(timeSec * 2.4).toFloat() else 0.45f
+            val turnB = if (isPlaying) 0.55f + 0.45f * sin(timeSec * 2.4 + PI).toFloat() else 0.45f
+
+            val rA = width * (0.14f + 0.05f * turnA)
+            val rB = width * (0.14f + 0.05f * turnB)
+
+            orbPaint.shader = RadialGradient(
+                cx - sep, cy, rA,
+                intArrayOf(
+                    (0x0038BDF8) or (((masterAlpha * (0.38f + 0.25f * turnA)).toInt()) shl 24),
+                    (0x0038BDF8) or (((masterAlpha * 0.10f).toInt()) shl 24),
+                    Color.TRANSPARENT
+                ),
+                null, Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(cx - sep, cy, rA, orbPaint)
+
+            orbPaint.shader = RadialGradient(
+                cx + sep, cy, rB,
+                intArrayOf(
+                    (0x00818CF8) or (((masterAlpha * (0.38f + 0.25f * turnB)).toInt()) shl 24),
+                    (0x00818CF8) or (((masterAlpha * 0.10f).toInt()) shl 24),
+                    Color.TRANSPARENT
+                ),
+                null, Shader.TileMode.CLAMP
+            )
+            canvas.drawCircle(cx + sep, cy, rB, orbPaint)
+            orbPaint.shader = null
+
+            val posMs = state.currentPositionMs()
+            val durMs = state.durationMs
+            val timerText = if (durMs > 0L) {
+                "${formatTime(posMs)}  /  ${formatTime(durMs)}"
+            } else {
+                formatTime(posMs)
+            }
+            studioTimerPaint.textSize = width * 0.036f
+            studioTimerPaint.alpha = (masterAlpha * 0.78f).toInt()
+            canvas.drawText(timerText, cx, cy + width * 0.22f, studioTimerPaint)
+        }
+
+        private fun formatTime(ms: Long): String {
+            val totalSec = (ms / 1000L).coerceAtLeast(0L)
+            val m = totalSec / 60L
+            val s = totalSec % 60L
+            return "%02d:%02d".format(m, s)
         }
 
         private fun drawBreathingBackdrop(

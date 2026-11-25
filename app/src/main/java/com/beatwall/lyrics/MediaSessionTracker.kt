@@ -39,7 +39,8 @@ data class ActiveTrackState(
     val showLyrics: Boolean,
     val basePositionMs: Long,
     val lastUpdateElapsedMs: Long,
-    val playbackSpeed: Float
+    val playbackSpeed: Float,
+    val isNotebookLm: Boolean = false
 ) {
     fun currentPositionMs(nowElapsedMs: Long = SystemClock.elapsedRealtime()): Long {
         if (!isPlaying) return basePositionMs
@@ -62,10 +63,30 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
     private val allowedPackages = setOf(
         "com.spotify.music",
         "com.google.android.apps.youtube.music",
-        "com.google.android.youtube"
+        "com.google.android.youtube",
+        "com.google.android.apps.labs.language.tailwind",
+        "com.android.chrome",
+        "com.google.android.googlequicksearchbox"
     )
     private val youtubePkg = "com.google.android.youtube"
+    private val notebookLmPkg = "com.google.android.apps.labs.language.tailwind"
+    private val browserAudioPkgs = setOf("com.android.chrome", "com.google.android.googlequicksearchbox")
     private val pauseGraceMs = 3_000L
+
+    private fun isAllowedSession(controller: MediaController): Boolean {
+        val pkg = controller.packageName
+        if (pkg !in allowedPackages) return false
+        if (pkg !in browserAudioPkgs) return true
+        val meta = controller.metadata ?: return false
+        val hay = listOf(
+            meta.getString(MediaMetadata.METADATA_KEY_TITLE),
+            meta.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE),
+            meta.getString(MediaMetadata.METADATA_KEY_ARTIST),
+            meta.getString(MediaMetadata.METADATA_KEY_ALBUM),
+            meta.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
+        ).filterNotNull().joinToString(" ").lowercase()
+        return hay.contains("notebooklm") || hay.contains("audio overview") || hay.contains("deep dive")
+    }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -154,7 +175,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
     }
 
     private fun selectController(controllers: List<MediaController>) {
-        val allowed = controllers.filter { it.packageName in allowedPackages }
+        val allowed = controllers.filter { isAllowedSession(it) }
         val playing = allowed.firstOrNull {
             val st = it.playbackState?.state
             st == PlaybackState.STATE_PLAYING || st == PlaybackState.STATE_BUFFERING
@@ -301,26 +322,30 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
             ?: SystemClock.elapsedRealtime()
         val speed = pb?.playbackSpeed?.takeIf { it > 0f } ?: 1.0f
 
+        val isNotebook = pkg == notebookLmPkg || pkg in browserAudioPkgs
+
         if (isNewTrack) {
             if (pkg != youtubePkg) {
                 currentState = ActiveTrackState(
                     trackKey = trackKey,
                     packageName = pkg,
                     title = clean.title,
-                    artist = clean.artist,
+                    artist = if (isNotebook) clean.artist.ifBlank { "NotebookLM • Audio Overview" } else clean.artist,
                     durationMs = durationMs,
-                    processedArt = currentState?.processedArt,
+                    processedArt = if (isNotebook && validRawCover == null && artUri.isNullOrBlank()) artProcessor.processNotebookStudioFallback() else currentState?.processedArt,
                     lyrics = emptyList(),
                     isPlaying = stateCode == PlaybackState.STATE_PLAYING,
                     showLyrics = false,
                     basePositionMs = basePos,
                     lastUpdateElapsedMs = updateElapsed,
-                    playbackSpeed = speed
+                    playbackSpeed = speed,
+                    isNotebookLm = isNotebook
                 )
                 notifyListeners(currentState)
             }
 
             lyricsJob?.cancel()
+            if (!isNotebook) {
             lyricsJob = scope.launch {
                 val lyrics = lrcClient.fetchSyncedLyrics(rawTitle, rawArtist, durationMs)
                 if (trackKey != currentTrackKey) return@launch
@@ -346,6 +371,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
                 )
                 notifyListeners(currentState)
             }
+            }
         }
 
         // Prefer ART_URI -> validRawCover -> iTunes HD Cover Search fallback
@@ -353,7 +379,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         artJob = scope.launch {
             val bmp = withContext(Dispatchers.IO) {
                 val fromUri = loadBitmapFromUriCached(artUri)?.takeUnless { isSpotifyTargetPlaceholder(it) }
-                fromUri ?: validRawCover ?: fetchItunesArtworkCached(clean.title, clean.artist)
+                fromUri ?: validRawCover ?: if (isNotebook) null else fetchItunesArtworkCached(clean.title, clean.artist)
             } ?: return@launch
 
             if (trackKey != currentTrackKey) return@launch
