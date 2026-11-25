@@ -88,45 +88,77 @@ class ArtEffectProcessor {
             return existing
         }
 
+        val isDay = minuteOfDay in 360..1080
         val (a, b, t) = findSkyBrackets(minuteOfDay)
         val timePrimary = ColorUtils.blendARGB(a.primary, b.primary, t)
         val timeSecondary = ColorUtils.blendARGB(a.secondary, b.secondary, t)
         val timeAccent = ColorUtils.blendARGB(a.accent, b.accent, t)
 
         val biome = NatureBiomes.getBlendedBiome(dayOfMonth, minuteOfDay)
-        val zenith = ColorUtils.blendARGB(biome.zenith, timeSecondary, 0.30f)
-        val midSky = ColorUtils.blendARGB(biome.midSky, timePrimary, 0.42f)
-        val horizon = ColorUtils.blendARGB(biome.horizon, timePrimary, 0.28f)
-        val accent = ColorUtils.blendARGB(biome.accent, timeAccent, 0.35f)
-        val deepBase = ColorUtils.blendARGB(zenith, 0xFF040509.toInt(), 0.65f)
+        // Daytime: Time-of-Day leads (75%) so afternoon is always crisp & bright; Night: Biome shines (55%)
+        val biomeWeight = if (isDay) 0.25f else 0.55f
+        val zenith = ColorUtils.blendARGB(timeSecondary, biome.zenith, biomeWeight)
+        val midSky = ColorUtils.blendARGB(timePrimary, biome.midSky, biomeWeight)
+        val paleHorizon = if (isDay) {
+            ColorUtils.blendARGB(ColorUtils.blendARGB(midSky, 0xFFBAE6FD.toInt(), 0.35f), biome.horizon, 0.22f)
+        } else {
+            ColorUtils.blendARGB(timeSecondary, biome.horizon, 0.45f)
+        }
+        val accent = ColorUtils.blendARGB(timeAccent, biome.accent, 0.35f)
+
+        val seaTop = if (isDay) {
+            ColorUtils.blendARGB(0xFF0E4D7A.toInt(), paleHorizon, 0.32f)
+        } else {
+            ColorUtils.blendARGB(0xFF041022.toInt(), zenith, 0.35f)
+        }
+        val seaDeep = if (isDay) {
+            ColorUtils.blendARGB(0xFF092B47.toInt(), biome.midSky, 0.25f)
+        } else {
+            0xFF030814.toInt()
+        }
+        val wetSand = if (isDay) {
+            ColorUtils.blendARGB(0xFF2B2825.toInt(), paleHorizon, 0.16f)
+        } else {
+            0xFF090B10.toInt()
+        }
+        val shoreDark = if (isDay) 0xFF171618.toInt() else 0xFF050609.toInt()
+
+        val horizonY = circHeight * 0.66f
+        val shoreY = circHeight * 0.85f
 
         val canvas = Canvas(circadianBitmap)
+        // 1. Sky gradient (0 -> 66%)
         val skyPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
             shader = LinearGradient(
-                0f, 0f, 0f, circHeight.toFloat(),
-                intArrayOf(zenith, midSky, horizon, deepBase),
-                floatArrayOf(0f, 0.42f, 0.76f, 1f),
+                0f, 0f, 0f, horizonY,
+                intArrayOf(zenith, midSky, paleHorizon),
+                floatArrayOf(0f, 0.54f, 1f),
                 Shader.TileMode.CLAMP
             )
         }
-        canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), skyPaint)
+        canvas.drawRect(0f, 0f, circWidth.toFloat(), horizonY, skyPaint)
 
-        val g1 = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
-            shader = RadialGradient(
-                circWidth * 0.26f, circHeight * 0.32f, circWidth * 1.05f,
-                intArrayOf(withAlpha(midSky, 175), Color.TRANSPARENT),
-                null, Shader.TileMode.CLAMP
+        // 2. Calm Sea gradient (66% -> 85%)
+        val seaPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
+            shader = LinearGradient(
+                0f, horizonY, 0f, shoreY,
+                intArrayOf(seaTop, seaDeep),
+                null,
+                Shader.TileMode.CLAMP
             )
         }
-        val g2 = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
-            shader = RadialGradient(
-                circWidth * 0.76f, circHeight * 0.72f, circWidth * 1.10f,
-                intArrayOf(withAlpha(horizon, 165), Color.TRANSPARENT),
-                null, Shader.TileMode.CLAMP
+        canvas.drawRect(0f, horizonY, circWidth.toFloat(), shoreY, seaPaint)
+
+        // 3. Smooth muted wet-sand shoreline (85% -> 100%, dark enough for crisp dock labels)
+        val shorePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
+            shader = LinearGradient(
+                0f, shoreY - 18f, 0f, circHeight.toFloat(),
+                intArrayOf(seaDeep, wetSand, shoreDark),
+                floatArrayOf(0f, 0.22f, 1f),
+                Shader.TileMode.CLAMP
             )
         }
-        canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), g1)
-        canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), g2)
+        canvas.drawRect(0f, shoreY - 18f, circWidth.toFloat(), circHeight.toFloat(), shorePaint)
         canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), grainPaint)
 
         return CircadianTheme(
@@ -136,7 +168,7 @@ class ArtEffectProcessor {
             primary = midSky,
             secondary = zenith,
             accent = accent,
-            horizonColor = horizon,
+            horizonColor = paleHorizon,
             particleKind = biome.particleKind
         ).also {
             cachedCircadianTheme = it
