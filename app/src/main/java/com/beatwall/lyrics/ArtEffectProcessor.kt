@@ -81,48 +81,78 @@ class ArtEffectProcessor {
         shader = BitmapShader(grainBmp, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
     }
 
-    fun getCircadianTheme(dayOfMonth: Int, minuteOfDay: Int): CircadianTheme {
+    fun getCircadianTheme(dayOfMonth: Int, minuteOfDay: Int, sunAltDeg: Float = 35f): CircadianTheme {
         val existing = cachedCircadianTheme
-        val refreshWindow = if (minuteOfDay >= 1430 || minuteOfDay <= 10) 4 else 10
+        val refreshWindow = if (sunAltDeg in -14f..12f || minuteOfDay >= 1430 || minuteOfDay <= 10) 3 else 10
         if (existing != null && existing.dayKey == dayOfMonth && abs(minuteOfDay - existing.minuteKey) < refreshWindow) {
             return existing
         }
 
-        val isDay = minuteOfDay in 360..1080
-        val (a, b, t) = findSkyBrackets(minuteOfDay)
-        val timePrimary = ColorUtils.blendARGB(a.primary, b.primary, t)
-        val timeSecondary = ColorUtils.blendARGB(a.secondary, b.secondary, t)
-        val timeAccent = ColorUtils.blendARGB(a.accent, b.accent, t)
-
-        val biome = NatureBiomes.getBlendedBiome(dayOfMonth, minuteOfDay)
-        // Daytime: Time-of-Day leads (80%) for bright natural atmosphere; Night: Biome shines (52%)
-        val biomeWeight = if (isDay) 0.20f else 0.52f
-        val zenith = ColorUtils.blendARGB(timeSecondary, biome.zenith, biomeWeight)
-        val midSky = ColorUtils.blendARGB(timePrimary, biome.midSky, biomeWeight)
-        val paleHorizon = if (isDay) {
-            ColorUtils.blendARGB(ColorUtils.blendARGB(midSky, 0xFFE0F2FE.toInt(), 0.45f), biome.horizon, 0.16f)
-        } else {
-            ColorUtils.blendARGB(timeSecondary, biome.horizon, 0.42f)
+        // Physics-driven sky palette from real Sun Altitude (h)
+        val (baseZenith, baseMid, baseHorizon, baseAccent) = when {
+            sunAltDeg >= 25f -> {
+                // Bright Crisp Afternoon
+                arrayOf(0xFF1D4ED8.toInt(), 0xFF0284C7.toInt(), 0xFFBAE6FD.toInt(), 0xFF7DD3FC.toInt())
+            }
+            sunAltDeg >= 5f -> {
+                val f = ((sunAltDeg - 5f) / 20f).coerceIn(0f, 1f)
+                arrayOf(
+                    ColorUtils.blendARGB(0xFF1E3A8A.toInt(), 0xFF1D4ED8.toInt(), f),
+                    ColorUtils.blendARGB(0xFF3B82F6.toInt(), 0xFF0284C7.toInt(), f),
+                    ColorUtils.blendARGB(0xFFFDE68A.toInt(), 0xFFBAE6FD.toInt(), f),
+                    ColorUtils.blendARGB(0xFFFDBA74.toInt(), 0xFF7DD3FC.toInt(), f)
+                )
+            }
+            sunAltDeg >= -2f -> {
+                // Real Golden Hour / Sunset / Sunrise
+                val f = ((sunAltDeg + 2f) / 7f).coerceIn(0f, 1f)
+                arrayOf(
+                    ColorUtils.blendARGB(0xFF1E1B4B.toInt(), 0xFF1E3A8A.toInt(), f),
+                    ColorUtils.blendARGB(0xFF9D174D.toInt(), 0xFF3B82F6.toInt(), f),
+                    ColorUtils.blendARGB(0xFFFB923C.toInt(), 0xFFFDE68A.toInt(), f),
+                    ColorUtils.blendARGB(0xFFFDBA74.toInt(), 0xFFFBBF24.toInt(), f)
+                )
+            }
+            sunAltDeg >= -12f -> {
+                // Civil & Nautical Twilight
+                val f = ((sunAltDeg + 12f) / 10f).coerceIn(0f, 1f)
+                arrayOf(
+                    ColorUtils.blendARGB(0xFF030712.toInt(), 0xFF1E1B4B.toInt(), f),
+                    ColorUtils.blendARGB(0xFF0F172A.toInt(), 0xFF9D174D.toInt(), f),
+                    ColorUtils.blendARGB(0xFF1E1B4B.toInt(), 0xFFFB923C.toInt(), f),
+                    ColorUtils.blendARGB(0xFFA5B4FC.toInt(), 0xFFFDBA74.toInt(), f)
+                )
+            }
+            else -> {
+                // Deep Astronomical Night
+                arrayOf(0xFF030612.toInt(), 0xFF0B132B.toInt(), 0xFF1E293B.toInt(), 0xFF93C5FD.toInt())
+            }
         }
-        val accent = ColorUtils.blendARGB(timeAccent, biome.accent, 0.35f)
 
-        // Sea mirrors the sky horizon & depth naturally
+        val isDay = sunAltDeg > -2f
+        val biome = NatureBiomes.getBlendedBiome(dayOfMonth, minuteOfDay)
+        val biomeWeight = if (sunAltDeg > 10f) 0.18f else if (isDay) 0.25f else 0.48f
+        val zenith = ColorUtils.blendARGB(baseZenith, biome.zenith, biomeWeight)
+        val midSky = ColorUtils.blendARGB(baseMid, biome.midSky, biomeWeight)
+        val paleHorizon = ColorUtils.blendARGB(baseHorizon, biome.horizon, if (isDay) 0.16f else 0.38f)
+        val accent = ColorUtils.blendARGB(baseAccent, biome.accent, 0.35f)
+
         val seaTop = if (isDay) {
-            ColorUtils.blendARGB(paleHorizon, 0xFF0369A1.toInt(), 0.36f)
+            ColorUtils.blendARGB(paleHorizon, 0xFF0369A1.toInt(), 0.34f)
         } else {
-            ColorUtils.blendARGB(0xFF041022.toInt(), paleHorizon, 0.32f)
+            ColorUtils.blendARGB(0xFF040D1A.toInt(), paleHorizon, 0.30f)
         }
         val seaDeep = if (isDay) {
             ColorUtils.blendARGB(0xFF0C3659.toInt(), midSky, 0.22f)
         } else {
-            0xFF030712.toInt()
+            0xFF020612.toInt()
         }
         val wetSand = if (isDay) {
             ColorUtils.blendARGB(0xFF1F2024.toInt(), paleHorizon, 0.12f)
         } else {
-            0xFF07090E.toInt()
+            0xFF06080D.toInt()
         }
-        val shoreDark = if (isDay) 0xFF121316.toInt() else 0xFF040508.toInt()
+        val shoreDark = if (isDay) 0xFF121316.toInt() else 0xFF030508.toInt()
 
         val horizonY = circHeight * 0.66f
         val shoreY = circHeight * 0.85f

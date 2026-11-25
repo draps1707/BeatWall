@@ -14,17 +14,17 @@
         android:padding="24dp">
 
         <ImageView
-            android:layout_width="88dp"
-            android:layout_height="88dp"
-            android:layout_marginTop="48dp"
+            android:layout_width="84dp"
+            android:layout_height="84dp"
+            android:layout_marginTop="36dp"
             android:contentDescription="@string/app_name"
             android:src="@mipmap/ic_launcher_round" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            android:layout_marginBottom="40dp"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="28dp"
             android:fontFamily="sans-serif-medium"
             android:text="BeatWall"
             android:textColor="#FFFFFF"
@@ -105,7 +105,7 @@
             android:id="@+id/cardNowPlaying"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="28dp"
+            android:layout_marginBottom="16dp"
             android:visibility="gone"
             app:cardBackgroundColor="#11131C"
             app:cardCornerRadius="20dp"
@@ -160,9 +160,98 @@
                         android:layout_height="wrap_content"
                         android:ellipsize="end"
                         android:maxLines="1"
-                        android:text="Play Spotify, YT Music, or YouTube"
+                        android:text="Play Spotify, YT Music, or NotebookLM"
                         android:textColor="#94A3B8"
                         android:textSize="13sp" />
+                </LinearLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Location & Live Sky Astronomy Card -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardSkyLocation"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="22dp"
+            app:cardBackgroundColor="#11131C"
+            app:cardCornerRadius="20dp"
+            app:strokeColor="#1E293B"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/txtLocationCity"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Rourkela, Odisha"
+                            android:textColor="#F8FAFC"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/txtSkyMetrics"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="3dp"
+                            android:text="Sunrise 6:06 AM • Sunset 5:09 PM"
+                            android:textColor="#94A3B8"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <Button
+                        android:id="@+id/btnDetectCity"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Detect" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <EditText
+                        android:id="@+id/edtCityInput"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_weight="1"
+                        android:background="#0B0D14"
+                        android:hint="City or PIN (e.g. Puri, 769002)"
+                        android:imeOptions="actionDone"
+                        android:inputType="textCapWords"
+                        android:paddingHorizontal="12dp"
+                        android:singleLine="true"
+                        android:textColor="#F8FAFC"
+                        android:textColorHint="#64748B"
+                        android:textSize="13sp" />
+
+                    <Button
+                        android:id="@+id/btnSetCity"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:text="Set" />
                 </LinearLayout>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
