@@ -948,17 +948,8 @@ class BeatWallService : WallpaperService() {
                 val coronaCol = if (isCharging) 0xFF34D399.toInt() else sky.sunCoronaColor
                 val pulse = if (isCharging) 0.75f + 0.25f * sin(timeSec * 2.2).toFloat() else 1f
                 val glowR = width * 0.16f
-                orbPaint.shader = RadialGradient(
-                    sunX, sunY, glowR,
-                    intArrayOf(
-                        (coronaCol and 0x00FFFFFF) or (((masterAlpha * 0.48f * horizonFade * pulse).toInt()) shl 24),
-                        (coronaCol and 0x00FFFFFF) or (((masterAlpha * 0.14f * horizonFade * pulse).toInt()) shl 24),
-                        Color.TRANSPARENT
-                    ),
-                    null, Shader.TileMode.CLAMP
-                )
-                canvas.drawCircle(sunX, sunY, glowR, orbPaint)
-                orbPaint.shader = null
+                val sunGlowAlpha = (masterAlpha * 0.48f * horizonFade * pulse).toInt().coerceIn(0, 255)
+                drawSoftOval(sunX, sunY, glowR, glowR, (coronaCol and 0x00FFFFFF) or (sunGlowAlpha shl 24))
 
                 orbPaint.color = if (sky.isSolarEclipse) 0xFF05060A.toInt() else sky.sunColor
                 orbPaint.alpha = (masterAlpha * 0.94f * horizonFade).toInt()
@@ -972,16 +963,8 @@ class BeatWallService : WallpaperService() {
                 val r = width * 0.024f * sky.moonSizeScale
                 val moonGlowR = r * 5.2f
                 val glowCol = if (isCharging && sky.sunAltDeg <= -3f) 0xFF34D399.toInt() else sky.moonCoronaColor
-                orbPaint.shader = RadialGradient(
-                    moonX, moonY, moonGlowR,
-                    intArrayOf(
-                        (glowCol and 0x00FFFFFF) or (((masterAlpha * 0.36f * moonHorizonFade * dayVisibility).toInt()) shl 24),
-                        Color.TRANSPARENT
-                    ),
-                    null, Shader.TileMode.CLAMP
-                )
-                canvas.drawCircle(moonX, moonY, moonGlowR, orbPaint)
-                orbPaint.shader = null
+                val moonGlowAlpha = (masterAlpha * 0.36f * moonHorizonFade * dayVisibility).toInt().coerceIn(0, 255)
+                drawSoftOval(moonX, moonY, moonGlowR, moonGlowR, (glowCol and 0x00FFFFFF) or (moonGlowAlpha shl 24))
 
                 canvas.save()
                 canvas.translate(moonX, moonY)
@@ -1012,8 +995,9 @@ class BeatWallService : WallpaperService() {
                 canvas.restore()
             }
 
-            // 3. Sunlit Wind-Driven Clouds + Crepuscular Sunbeams + 4-Gull Thermal Flock
-            if (isDay) {
+            // 3. Sunlit Wind-Driven Clouds + Soft Sun-Wash + 4-Gull Thermal Flock (smooth twilight fade)
+            val dayFactor = ((sky.sunAltDeg + 2f) / 6f).coerceIn(0f, 1f)
+            if (dayFactor > 0.01f) {
                 val windFactor = (0.75f + weatherState.windKmh / 24f).coerceIn(0.65f, 1.85f)
                 val cloudScale = (0.35f + (weatherState.cloudCoverPct / 100f) * 0.95f).coerceIn(0.30f, 1.30f)
                 val cloudTint = ColorUtils.blendARGB(Color.WHITE, circ.horizonColor, 0.22f) and 0x00FFFFFF
@@ -1024,7 +1008,7 @@ class BeatWallService : WallpaperService() {
                     val speed = (0.0062f + c * 0.0016f) * windFactor
                     val cx = (((0.18f + c * 0.36f + (timeSec * speed).toFloat()) % 1.48f) - 0.24f) * width
                     val cy = height * (0.26f + c * 0.11f)
-                    val baseAlpha = (masterAlpha * (0.24f - c * 0.04f) * cloudScale).toInt().coerceIn(0, 255)
+                    val baseAlpha = (masterAlpha * (0.24f - c * 0.04f) * cloudScale * dayFactor).toInt().coerceIn(0, 255)
                     val col = cloudTint or (baseAlpha shl 24)
                     drawSoftOval(cx, cy, width * 0.30f, height * 0.032f, col)
                     drawSoftOval(cx - width * 0.10f, cy - height * 0.010f, width * 0.18f, height * 0.024f, col)
@@ -1032,7 +1016,7 @@ class BeatWallService : WallpaperService() {
 
                     // Sunlit rim highlight on the Sun-facing side of each cloud
                     val sunDir = if (sunX >= cx) 1f else -1f
-                    val rimAlpha = (masterAlpha * 0.12f * cloudScale).toInt().coerceIn(0, 255)
+                    val rimAlpha = (masterAlpha * 0.12f * cloudScale * dayFactor).toInt().coerceIn(0, 255)
                     drawSoftOval(cx + sunDir * width * 0.08f, cy - height * 0.004f, width * 0.16f, height * 0.018f, sunRimRgb or (rimAlpha shl 24))
 
                     val dSun = kotlin.math.abs(cx - sunX) / (width * 0.30f)
@@ -1045,8 +1029,8 @@ class BeatWallService : WallpaperService() {
                 if (nearSunBeam > 0.05f && sky.sunAltDeg > 4f) {
                     val spanY = (horizonY - sunY).coerceAtLeast(height * 0.08f)
                     val driftX = (sunX - width * 0.5f) * 0.08f
-                    val upperAlpha = (masterAlpha * 0.055f * nearSunBeam).toInt().coerceIn(0, 255)
-                    val lowerAlpha = (masterAlpha * 0.035f * nearSunBeam).toInt().coerceIn(0, 255)
+                    val upperAlpha = (masterAlpha * 0.055f * nearSunBeam * dayFactor).toInt().coerceIn(0, 255)
+                    val lowerAlpha = (masterAlpha * 0.035f * nearSunBeam * dayFactor).toInt().coerceIn(0, 255)
                     drawSoftOval(
                         sunX + driftX * 0.5f,
                         sunY + spanY * 0.34f,
@@ -1073,7 +1057,7 @@ class BeatWallService : WallpaperService() {
                     val gy = height * (0.29f + offsetY) - sin(timeSec * 0.8 + g * 0.9).toFloat() * (height * 0.007f)
                     val span = width * (0.014f - g * 0.0018f)
                     val flap = sin(timeSec * 2.8 + g * 1.3).toFloat() * (span * 0.38f)
-                    baselinePaint.alpha = (masterAlpha * (0.42f - g * 0.05f)).toInt()
+                    baselinePaint.alpha = (masterAlpha * (0.42f - g * 0.05f) * dayFactor).toInt().coerceIn(0, 255)
                     canvas.drawLine(gx - span, gy - flap, gx, gy + span * 0.22f, baselinePaint)
                     canvas.drawLine(gx, gy + span * 0.22f, gx + span, gy - flap, baselinePaint)
                 }
@@ -1102,14 +1086,16 @@ class BeatWallService : WallpaperService() {
             }
 
             if (weather == SkyWeather.RAIN || weather == SkyWeather.THUNDERSTORM) {
+                val windSlant = width * (0.008f + (weatherState.windKmh / 65f).coerceIn(0f, 0.026f))
                 baselinePaint.strokeWidth = density * 0.9f
                 baselinePaint.color = 0xFFE2E8F0.toInt()
                 baselinePaint.alpha = (masterAlpha * 0.22f).toInt()
                 for (rIdx in 0 until 20) {
-                    val rProg = (((timeSec * 1.65) + rIdx * 0.19) % 1.0 + 1.0) % 1.0
-                    val rx = ((rIdx * 0.053f + 0.02f) % 1.0f) * width - (rProg.toFloat() * width * 0.04f)
+                    val hDrop = abs(sin(rIdx * 12.9898 + 0.5)).toFloat()
+                    val rProg = (((timeSec * (1.55 + hDrop * 0.35)) + rIdx * 0.19 + hDrop * 0.37) % 1.0 + 1.0) % 1.0
+                    val rx = (hDrop * width) - (rProg.toFloat() * windSlant * 2.2f)
                     val ry = rProg.toFloat() * horizonY
-                    canvas.drawLine(rx, ry, rx - width * 0.012f, ry + height * 0.024f, baselinePaint)
+                    canvas.drawLine(rx, ry, rx - windSlant, ry + height * 0.024f, baselinePaint)
                 }
             }
 
@@ -1130,15 +1116,10 @@ class BeatWallService : WallpaperService() {
                 }
             }
 
-            // 4. Horizon Mirage & Haze Band + Wind-Modulated Sun/Moon Water Reflection Column
+            // 4. Seamless Horizon Mirage & Haze Band + Wind-Modulated Sun/Moon Water Reflection Column
             val mirageRgb = (if (isDay) circ.horizonColor else 0xFF334155.toInt()) and 0x00FFFFFF
-            val mirageAlpha = (masterAlpha * (if (isDay) 0.22f else 0.10f)).toInt().coerceIn(0, 255)
-            drawSoftOval(width * 0.5f, horizonY, width * 0.88f, height * 0.018f, mirageRgb or (mirageAlpha shl 24))
-
-            baselinePaint.strokeWidth = density * 0.75f
-            baselinePaint.color = Color.WHITE
-            baselinePaint.alpha = (masterAlpha * (if (isDay) 0.16f else 0.10f)).toInt()
-            canvas.drawLine(0f, horizonY, width.toFloat(), horizonY, baselinePaint)
+            val mirageAlpha = (masterAlpha * (if (isDay) 0.24f else 0.11f)).toInt().coerceIn(0, 255)
+            drawSoftOval(width * 0.5f, horizonY, width * 0.90f, height * 0.020f, mirageRgb or (mirageAlpha shl 24))
 
             val seaMidY = horizonY + (shoreY - horizonY) * 0.42f
             val seaSpanY = (shoreY - horizonY) * 0.52f
@@ -1172,30 +1153,68 @@ class BeatWallService : WallpaperService() {
             moonPath.close()
             canvas.drawPath(moonPath, eqBarPaint)
 
-            // 6. Calm, Noticeable Ocean Swells (~16.5s per swell)
-            val swellRgb = if (isDay) 0x00E0F2FE else 0x0022D3EE
-            val steps = 28
-            for (wIdx in 0 until 2) {
-                val waveProg = (((timeSec * 0.060) + wIdx * 0.5) % 1.0).toFloat()
-                val wy = horizonY + (shoreY - horizonY) * (0.15f + waveProg * 0.82f)
+            // 6. Natural Foreshortened 3-Wave Surf & Receding Shore Foam (0 allocs)
+            val swellRgb = if (isDay) 0x00E0F2FE else 0x0094A3B8
+            val foamRgb = if (isDay) 0x00F8FAFC else 0x00CBD5E1
+            val crestColor = if (isDay) 0xFFF8FAFC.toInt() else 0xFF94A3B8.toInt()
+            val surfEnergy = (0.78f + (weatherState.windKmh / 42f)).coerceIn(0.75f, 1.35f)
+            val seaSpan = (shoreY - horizonY).coerceAtLeast(1f)
+
+            // Subtle breathing tidal shoreline mist right at shoreY (83%..87%)
+            val tideBreath = 0.85f + 0.15f * sin(timeSec * 0.45).toFloat()
+            val tideAlpha = (masterAlpha * (if (isDay) 0.14f else 0.09f) * tideBreath).toInt().coerceIn(0, 255)
+            drawSoftOval(width * 0.5f, shoreY + height * 0.004f, width * 0.78f, height * 0.011f, foamRgb or (tideAlpha shl 24))
+
+            val steps = 24
+            for (wIdx in 0 until 3) {
+                val waveProg = (((timeSec * 0.052) + wIdx / 3.0) % 1.0).toFloat()
+                // Perspective easing: glassy upper ocean stays calm, lower swells accelerate toward shore
+                val persp = waveProg * kotlin.math.sqrt(waveProg)
+                val wy = horizonY + seaSpan * (0.36f + persp * 0.65f)
                 val env = sin(waveProg * PI).toFloat()
-                val glowAlpha = (masterAlpha * env * (if (isDay) 0.18f else 0.14f)).toInt().coerceIn(0, 255)
-                if (glowAlpha > 2) {
-                    drawSoftOval(width * 0.5f, wy, width * 0.68f, height * 0.012f, swellRgb or (glowAlpha shl 24))
+
+                // Asymmetric broken horizontal span (never edge-to-edge wires)
+                val centerFrac = when (wIdx) {
+                    0 -> 0.46f
+                    1 -> 0.56f
+                    else -> 0.42f
                 }
-                val crestAlpha = (masterAlpha * env * (if (isDay) 0.30f else 0.22f)).toInt().coerceIn(0, 255)
+                val halfSpanFrac = 0.34f + 0.10f * waveProg
+                val xStart = width * (centerFrac - halfSpanFrac).coerceAtLeast(0f)
+                val xEnd = width * (centerFrac + halfSpanFrac).coerceAtMost(1f)
+                val spanW = (xEnd - xStart).coerceAtLeast(1f)
+
+                val glowAlpha = (masterAlpha * env * (if (isDay) 0.14f else 0.08f) * surfEnergy).toInt().coerceIn(0, 255)
+                if (glowAlpha > 2) {
+                    drawSoftOval(xStart + spanW * 0.5f, wy, spanW * 0.52f, height * (0.006f + 0.006f * waveProg), swellRgb or (glowAlpha shl 24))
+                }
+
+                // Soft multi-harmonic crest only in mid-to-lower surf zone
+                val crestAlpha = (masterAlpha * env * (if (isDay) 0.22f else 0.12f) * waveProg * surfEnergy).toInt().coerceIn(0, 255)
                 if (crestAlpha > 2) {
-                    baselinePaint.strokeWidth = density * 1.15f
-                    baselinePaint.color = if (isDay) 0xFFF8FAFC.toInt() else 0xFF22D3EE.toInt()
+                    baselinePaint.strokeWidth = density * (0.85f + 0.45f * waveProg)
+                    baselinePaint.color = crestColor
                     baselinePaint.alpha = crestAlpha
                     moonPath.reset()
                     for (k in 0..steps) {
                         val fx = k.toFloat() / steps
-                        val wx = fx * width
-                        val dy = sin(fx * 2.2 * PI + timeSec * 0.7 + wIdx * 1.8).toFloat() * (height * 0.005f)
+                        val wx = xStart + fx * spanW
+                        val dy = (sin(fx * 2.4 * PI + timeSec * 0.65 + wIdx * 2.1) +
+                                  0.42 * sin(fx * 5.3 * PI - timeSec * 0.45 + wIdx * 1.3)).toFloat() * (height * 0.0032f)
                         if (k == 0) moonPath.moveTo(wx, wy + dy) else moonPath.lineTo(wx, wy + dy)
                     }
                     canvas.drawPath(moonPath, baselinePaint)
+                }
+
+                // Receding shore foam wash as the swell reaches shoreY
+                if (waveProg > 0.68f) {
+                    val washFrac = ((waveProg - 0.68f) / 0.32f).coerceIn(0f, 1f)
+                    val washEnv = sin(washFrac * PI).toFloat()
+                    val washY = shoreY + height * (0.008f * washEnv)
+                    val washAlpha = (masterAlpha * washEnv * (if (isDay) 0.20f else 0.11f) * surfEnergy).toInt().coerceIn(0, 255)
+                    if (washAlpha > 2) {
+                        drawSoftOval(xStart + spanW * 0.5f, washY, spanW * 0.56f, height * (0.008f + 0.007f * washEnv), foamRgb or (washAlpha shl 24))
+                    }
                 }
             }
         }
