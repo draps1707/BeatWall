@@ -103,15 +103,15 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
 
     private val controllerCallback = object : MediaController.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadata?) {
-            handleControllerUpdate(activeController)
+            try { handleControllerUpdate(activeController) } catch (_: Throwable) {}
         }
 
         override fun onPlaybackStateChanged(state: PlaybackState?) {
-            handlePlaybackStateOnly(state)
+            try { handlePlaybackStateOnly(state) } catch (_: Throwable) {}
         }
 
         override fun onSessionDestroyed() {
-            refreshActiveSessions()
+            try { refreshActiveSessions() } catch (_: Throwable) {}
         }
     }
 

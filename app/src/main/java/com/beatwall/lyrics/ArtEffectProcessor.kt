@@ -42,6 +42,7 @@ class ArtEffectProcessor {
     private val blurHeight = 780
     private val pool = arrayOf(
         Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888),
+        Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888),
         Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888)
     )
     private var poolIdx = 0
@@ -216,12 +217,17 @@ class ArtEffectProcessor {
     }
 
     private fun gpuBlurToBitmap(src: Bitmap, w: Int, h: Int, radius: Float): Bitmap? {
+        var imageReader: ImageReader? = null
+        var renderer: HardwareRenderer? = null
+        var image: android.media.Image? = null
+        var hwBuffer: HardwareBuffer? = null
+        var hwBmp: Bitmap? = null
         return try {
-            val imageReader = ImageReader.newInstance(
+            imageReader = ImageReader.newInstance(
                 w, h, PixelFormat.RGBA_8888, 1,
                 HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
             )
-            val renderer = HardwareRenderer()
+            renderer = HardwareRenderer()
             val node = RenderNode("BeatWallBlur").apply {
                 setPosition(0, 0, w, h)
                 setRenderEffect(RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP))
@@ -243,18 +249,18 @@ class ArtEffectProcessor {
             renderer.setContentRoot(node)
             renderer.createRenderRequest().setWaitForPresent(true).syncAndDraw()
 
-            val image = imageReader.acquireNextImage()
-            val hwBuffer = image?.hardwareBuffer
-            val hwBmp = if (hwBuffer != null) Bitmap.wrapHardwareBuffer(hwBuffer, null) else null
-            val swBmp = hwBmp?.copy(Bitmap.Config.ARGB_8888, false)
-            hwBmp?.recycle()
-            hwBuffer?.close()
-            image?.close()
-            renderer.destroy()
-            imageReader.close()
-            swBmp
+            image = imageReader.acquireNextImage()
+            hwBuffer = image?.hardwareBuffer
+            hwBmp = if (hwBuffer != null) Bitmap.wrapHardwareBuffer(hwBuffer, null) else null
+            hwBmp?.copy(Bitmap.Config.ARGB_8888, false)
         } catch (_: Exception) {
             Bitmap.createScaledBitmap(src, w, h, true)
+        } finally {
+            try { hwBmp?.recycle() } catch (_: Exception) {}
+            try { hwBuffer?.close() } catch (_: Exception) {}
+            try { image?.close() } catch (_: Exception) {}
+            try { renderer?.destroy() } catch (_: Exception) {}
+            try { imageReader?.close() } catch (_: Exception) {}
         }
     }
 

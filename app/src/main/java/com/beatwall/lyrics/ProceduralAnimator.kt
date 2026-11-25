@@ -2,7 +2,6 @@ package com.beatwall.lyrics
 
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RadialGradient
 import android.graphics.Shader
@@ -163,20 +162,25 @@ class ProceduralAnimator {
     private fun drawDiagonalGodRays(
         canvas: Canvas, w: Int, h: Int, t: Double, c1: Int, c2: Int, density: Float, alpha: Int
     ) {
+        // Soft radial light plumes along a gentle diagonal axis (zero rectangular clipping)
         val count = (3 * density).toInt().coerceIn(3, 5)
-        val beamW = w * 0.22f
         for (i in 0 until count) {
-            val cx = w * (0.18f + i * (0.64f / (count - 1).coerceAtLeast(1))) +
-                sin(t * 0.45 + i * 1.1).toFloat() * (w * 0.08f)
+            val frac = i.toFloat() / (count - 1).coerceAtLeast(1)
+            val cx = w * (0.22f + frac * 0.56f) + sin(t * 0.42 + i * 1.2).toFloat() * (w * 0.08f)
+            val cy = h * (0.28f + frac * 0.44f) + cos(t * 0.35 + i * 0.9).toFloat() * (h * 0.06f)
+            val r = w * (0.48f + (i % 2) * 0.10f)
             val col = if (i % 2 == 0) c1 else c2
-            val pulse = 0.55f + 0.45f * ((sin(t * 0.8 + i) + 1.0) * 0.5).toFloat()
-            val a = (alpha * 0.24f * pulse).toInt()
-            paint.shader = LinearGradient(
-                cx - beamW, h * 0.15f, cx + beamW, h * 0.80f,
-                intArrayOf(Color.TRANSPARENT, (col and 0x00FFFFFF) or (a shl 24), Color.TRANSPARENT),
+            val pulse = 0.60f + 0.40f * ((sin(t * 0.75 + i) + 1.0) * 0.5).toFloat()
+            paint.shader = RadialGradient(
+                cx, cy, r,
+                intArrayOf(
+                    (col and 0x00FFFFFF) or (((alpha * 0.28f * pulse).toInt()) shl 24),
+                    (col and 0x00FFFFFF) or (((alpha * 0.09f * pulse).toInt()) shl 24),
+                    Color.TRANSPARENT
+                ),
                 null, Shader.TileMode.CLAMP
             )
-            canvas.drawRect(0f, h * 0.10f, w.toFloat(), h * 0.86f, paint)
+            canvas.drawCircle(cx, cy, r, paint)
         }
     }
 

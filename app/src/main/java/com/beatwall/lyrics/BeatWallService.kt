@@ -29,6 +29,7 @@ import android.text.TextUtils
 import android.view.Choreographer
 import android.view.Surface
 import android.view.SurfaceHolder
+import androidx.core.content.ContextCompat
 import java.util.Calendar
 import kotlin.math.PI
 import kotlin.math.abs
@@ -84,6 +85,11 @@ class BeatWallService : WallpaperService() {
         private var centeredLayouts: List<StaticLayout> = emptyList()
         private var lyricYCenters: FloatArray = FloatArray(0)
         private var focusWeights: FloatArray = FloatArray(0)
+        private var prevCenteredLayouts: List<StaticLayout> = emptyList()
+        private var prevLyricYCenters: FloatArray = FloatArray(0)
+        private var prevSpringY = 0f
+        private var prevCurrentLineIndex = -1
+        private var prevLyricsAlpha = 0f
         private var measuredTrackKey: String? = null
 
         private var headerTitleLayout: StaticLayout? = null
@@ -94,6 +100,7 @@ class BeatWallService : WallpaperService() {
         private var springVelocity = 0f
         private var targetY = 0f
         private var lastFrameNanos = 0L
+        private var lastDrawNanos = 0L
         private var currentRequestedHz = -1f
         private var frameScheduled = false
 
@@ -168,6 +175,10 @@ class BeatWallService : WallpaperService() {
         private val systemReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
+                    Intent.ACTION_SCREEN_OFF -> {
+                        stopLoop()
+                        return
+                    }
                     Intent.ACTION_USER_PRESENT -> proceduralAnimator.reroll(calmOnly = activeState == null)
                     Intent.ACTION_BATTERY_CHANGED -> updateBatteryFlags(intent)
                     PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> updateBatteryFlags(null)
@@ -175,6 +186,8 @@ class BeatWallService : WallpaperService() {
                 if (visible && powerManager.isInteractive) {
                     snapToCurrentPosition()
                     updateLoopState()
+                } else {
+                    stopLoop()
                 }
             }
         }
@@ -185,11 +198,17 @@ class BeatWallService : WallpaperService() {
             tracker.addListener(this)
             val filter = IntentFilter().apply {
                 addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_SCREEN_OFF)
                 addAction(Intent.ACTION_USER_PRESENT)
                 addAction(Intent.ACTION_BATTERY_CHANGED)
                 addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
             }
-            val stickyBatt = registerReceiver(systemReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            val stickyBatt = ContextCompat.registerReceiver(
+                this@BeatWallService,
+                systemReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
             updateBatteryFlags(stickyBatt)
         }
 
@@ -285,43 +304,62 @@ class BeatWallService : WallpaperService() {
         }
 
         override fun onTrackStateChanged(state: ActiveTrackState?) {
-            val prevKey = activeState?.trackKey
-            val newKey = state?.trackKey
-            val artChanged = activeState?.processedArt !== state?.processedArt
+            try {
+                val prevKey = activeState?.trackKey
+                val newKey = state?.trackKey
+                val artChanged = activeState?.processedArt !== state?.processedArt
 
-            if (prevKey != newKey || artChanged) {
-                if (activeState != null) {
-                    prevState = activeState
-                    crossfadeProgress = 0f
-                    crossfadeStartMs = SystemClock.elapsedRealtime()
-                }
                 if (prevKey != newKey) {
+                    if (activeState != null) {
+                        prevState = activeState
+                        prevCenteredLayouts = centeredLayouts
+                        prevLyricYCenters = lyricYCenters
+                        prevSpringY = springY
+                        prevCurrentLineIndex = currentLineIndex
+                        prevLyricsAlpha = lyricsAlpha
+                        crossfadeProgress = 0f
+                        crossfadeStartMs = SystemClock.elapsedRealtime()
+                    }
                     currentLineIndex = -1
                     springY = 0f
                     springVelocity = 0f
                     targetY = 0f
+                    if (state?.showLyrics != true || state.lyrics.isEmpty()) {
+                        lyricsAlpha = 0f
+                    }
                     proceduralAnimator.reroll(calmOnly = state == null)
+                } else if (artChanged && crossfadeProgress >= 1f && activeState != null) {
+                    // Only crossfade art smoothly if no track crossfade is already running
+                    prevState = activeState
+                    prevCenteredLayouts = centeredLayouts
+                    prevLyricYCenters = lyricYCenters
+                    prevSpringY = springY
+                    prevCurrentLineIndex = currentLineIndex
+                    prevLyricsAlpha = lyricsAlpha
+                    crossfadeProgress = 0f
+                    crossfadeStartMs = SystemClock.elapsedRealtime()
                 }
-            }
 
-            activeState = state
-            targetLyricsAlpha = if (state?.showLyrics == true && state.lyrics.isNotEmpty()) 1f else 0f
-            targetWaveAmp = if (state?.isPlaying == true && !isLowBattery) 1f else 0f
-            if (prevKey == null && state == null) {
-                lyricsAlpha = 0f
-                waveAmp = 0f
-            }
-            if (artChanged) {
-                try {
-                    notifyColorsChanged()
-                } catch (_: Exception) {
+                activeState = state
+                targetLyricsAlpha = if (state?.showLyrics == true && state.lyrics.isNotEmpty()) 1f else 0f
+                targetWaveAmp = if (state?.isPlaying == true && !isLowBattery) 1f else 0f
+                if (prevKey == null && state == null) {
+                    lyricsAlpha = 0f
+                    waveAmp = 0f
                 }
-            }
-            rebuildLayoutsIfNeeded(force = false)
-            if (visible && powerManager.isInteractive) {
-                snapToCurrentPosition()
-                drawFrame(System.nanoTime())
-                updateLoopState()
+                if (artChanged) {
+                    try {
+                        notifyColorsChanged()
+                    } catch (_: Exception) {
+                    }
+                }
+                rebuildLayoutsIfNeeded(force = false)
+                if (visible && powerManager.isInteractive) {
+                    snapToCurrentPosition()
+                    drawFrame(System.nanoTime())
+                    updateLoopState()
+                }
+            } catch (_: Throwable) {
             }
         }
 
@@ -407,20 +445,22 @@ class BeatWallService : WallpaperService() {
             if (abs(targetLyricsAlpha - lyricsAlpha) > 0.01f) return true
             if (abs(targetWaveAmp - waveAmp) > 0.01f) return true
             if (isLowBattery) return false
+            val st = activeState
+            if (st != null && !st.isPlaying) return false
             return true
         }
 
         private fun targetFrameRate(): Float {
             if (!needsAnimation()) return 0f
             return if (
-                activeState != null ||
                 crossfadeProgress < 1f ||
                 abs(targetLyricsAlpha - lyricsAlpha) > 0.01f ||
-                abs(targetWaveAmp - waveAmp) > 0.01f
+                abs(targetWaveAmp - waveAmp) > 0.01f ||
+                activeState?.isPlaying == true
             ) {
                 120f
             } else {
-                60f
+                30f
             }
         }
 
@@ -473,13 +513,18 @@ class BeatWallService : WallpaperService() {
                 return
             }
 
+            try {
             val dtSec = ((frameTimeNanos - lastFrameNanos) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
             lastFrameNanos = frameTimeNanos
 
             if (crossfadeProgress < 1f) {
                 val elapsed = SystemClock.elapsedRealtime() - crossfadeStartMs
                 crossfadeProgress = (elapsed.toFloat() / crossfadeDurationMs).coerceIn(0f, 1f)
-                if (crossfadeProgress >= 1f) prevState = null
+                if (crossfadeProgress >= 1f) {
+                    prevState = null
+                    prevCenteredLayouts = emptyList()
+                    prevLyricYCenters = FloatArray(0)
+                }
             }
 
             val alphaDiff = targetLyricsAlpha - lyricsAlpha
@@ -539,12 +584,18 @@ class BeatWallService : WallpaperService() {
                 }
             }
 
-            setSurfaceFrameRate(targetFrameRate())
-            drawFrame(frameTimeNanos)
+            val rate = targetFrameRate()
+            setSurfaceFrameRate(rate)
+            if (rate > 30f || (frameTimeNanos - lastDrawNanos) >= 31_000_000L) {
+                lastDrawNanos = frameTimeNanos
+                drawFrame(frameTimeNanos)
+            }
 
             if (needsAnimation()) {
                 frameScheduled = true
                 choreographer.postFrameCallback(this)
+            }
+            } catch (_: Throwable) {
             }
         }
 
@@ -634,19 +685,27 @@ class BeatWallService : WallpaperService() {
             val headerAlpha = (masterAlpha * headerFactor).toInt().coerceIn(0, 255)
             drawUnifiedCompactHeader(canvas, state, art, headerTop, timeSec, accent, primary, headerAlpha)
 
-            val lyrAlpha = (masterAlpha * lyricsAlpha).toInt().coerceIn(0, 255)
+            val isCurrent = state === activeState
+            val lyrAlpha = (masterAlpha * (if (isCurrent) lyricsAlpha else prevLyricsAlpha)).toInt().coerceIn(0, 255)
+            val layouts = if (isCurrent) centeredLayouts else prevCenteredLayouts
+            val centers = if (isCurrent) lyricYCenters else prevLyricYCenters
+            val activeLine = if (isCurrent) currentLineIndex else prevCurrentLineIndex
+            val yScroll = if (isCurrent) springY else prevSpringY
             val clipRect = if (isLock) lockLyricsClip else homeLyricsClip
             val centerY = if (isLock) height * 0.572f else height * 0.49f
             val centerX = width * 0.06f
 
-            if (state === activeState && lyrAlpha > 3 && centeredLayouts.isNotEmpty() && lyricYCenters.isNotEmpty()) {
+            if (lyrAlpha > 3 && layouts.isNotEmpty() && centers.isNotEmpty()) {
                 canvas.save()
                 canvas.clipRect(clipRect)
                 drawWindowedKaraokeLyrics(
                     canvas = canvas,
                     state = state,
-                    layouts = centeredLayouts,
-                    yCenters = lyricYCenters,
+                    layouts = layouts,
+                    yCenters = centers,
+                    activeLineIdx = activeLine,
+                    scrollY = yScroll,
+                    isCurrentState = isCurrent,
                     centerX = centerX,
                     centerY = centerY,
                     clipTop = clipRect.top,
@@ -831,8 +890,11 @@ class BeatWallService : WallpaperService() {
             canvas.restore()
 
             val artistBaselineY = blockTop + titleH + artistH * 0.74f
+            val displayArtist = state.artist.ifBlank {
+                if (state.packageName == "com.google.android.youtube") "YouTube" else "Music"
+            }
             canvas.drawText(
-                ellipsize(state.artist, headerArtistPaint, maxTextW),
+                ellipsize(displayArtist, headerArtistPaint, maxTextW),
                 textLeft,
                 artistBaselineY,
                 headerArtistPaint
@@ -940,6 +1002,9 @@ class BeatWallService : WallpaperService() {
             state: ActiveTrackState,
             layouts: List<StaticLayout>,
             yCenters: FloatArray,
+            activeLineIdx: Int,
+            scrollY: Float,
+            isCurrentState: Boolean,
             centerX: Float,
             centerY: Float,
             clipTop: Float,
@@ -950,7 +1015,7 @@ class BeatWallService : WallpaperService() {
         ) {
             val maxIdx = minOf(layouts.lastIndex, state.lyrics.lastIndex, yCenters.lastIndex)
             if (maxIdx < 0) return
-            val activeIdx = currentLineIndex.coerceIn(0, maxIdx)
+            val activeIdx = activeLineIdx.coerceIn(0, maxIdx)
             val start = (activeIdx - 3).coerceAtLeast(0)
             val end = (activeIdx + 3).coerceAtMost(maxIdx)
             val timeSec = frameTimeNanos / 1_000_000_000.0
@@ -961,11 +1026,13 @@ class BeatWallService : WallpaperService() {
             for (i in start..end) {
                 val layout = layouts[i]
                 val dist = abs(i - activeIdx)
-                val focusW = if (i in focusWeights.indices) focusWeights[i] else if (i == activeIdx) 1f else 0f
+                val focusW = if (isCurrentState && i in focusWeights.indices) focusWeights[i] else if (i == activeIdx) 1f else 0f
 
                 // Subtle Apple Music-style staggered cascade inertia
-                val stagger = (i - activeIdx) * (-springVelocity * 0.014f).coerceIn(-height * 0.012f, height * 0.012f)
-                val lineOffset = yCenters[i] - springY + stagger
+                val stagger = if (isCurrentState) {
+                    (i - activeIdx) * (-springVelocity * 0.014f).coerceIn(-height * 0.012f, height * 0.012f)
+                } else 0f
+                val lineOffset = yCenters[i] - scrollY + stagger
                 val yPos = centerY + lineOffset - (layout.height / 2f)
                 val lineCenterY = yPos + layout.height / 2f
 
@@ -1048,8 +1115,8 @@ class BeatWallService : WallpaperService() {
                         val localFrac = ((sungTargetW - consumedW) / lw).coerceIn(0f, 1f)
                         consumedW += lw
 
-                        val lTop = layout.getLineTop(l).toFloat() - 8f
-                        val lBot = layout.getLineBottom(l).toFloat() + 8f
+                        val lTop = layout.getLineTop(l).toFloat() - 28f
+                        val lBot = layout.getLineBottom(l).toFloat() + 28f
                         val leftEdge = (layout.width - lw) / 2f
 
                         canvas.save()
