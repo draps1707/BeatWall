@@ -1631,14 +1631,14 @@ class BeatWallService : WallpaperService() {
                 ribbonPaint.color = accent
                 ribbonPaint.strokeWidth = density * 1.85f
                 ribbonPaint.alpha = (alpha * (0.55f + 0.42f * ampScale)).toInt().coerceIn(0, 255)
-                val amp = width * 0.0095f * ampScale
-                val steps = (playedW / (density * 3.5f)).toInt().coerceIn(12, 96)
+                val amp = width * 0.0068f * ampScale
+                val steps = (playedW / (density * 2.0f)).toInt().coerceIn(16, 160)
                 ribbonPath.reset()
                 for (s in 0..steps) {
                     val fx = s.toFloat() / steps
                     val x = startX + playedW * fx
                     val env = if (fx > 0.94f) ((1f - fx) / 0.06f) else 1f
-                    val y = centerY + sin((x / (width * 0.022f)) - studioPhase * 4.4).toFloat() * amp * env
+                    val y = centerY + sin((x / (width * 0.0065f)) - studioPhase * 5.2).toFloat() * amp * env
                     if (s == 0) ribbonPath.moveTo(x, y) else ribbonPath.lineTo(x, y)
                 }
                 canvas.drawPath(ribbonPath, ribbonPaint)

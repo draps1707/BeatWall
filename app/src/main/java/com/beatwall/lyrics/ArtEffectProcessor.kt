@@ -329,26 +329,20 @@ class ArtEffectProcessor {
         val primaryGlow = enrichJewelGlow(rawPrimary, maxV = 0.58f)
         val secondaryGlow = enrichJewelGlow(rawSecondary, maxV = 0.48f)
 
-        val pHsv = FloatArray(3)
-        Color.colorToHSV(primaryGlow, pHsv)
-        val rawAccBoosted = ensureVibrantAccent(rawAccent)
-        val aHsv = FloatArray(3)
-        Color.colorToHSV(rawAccBoosted, aHsv)
-        val rawHueDiff = abs(pHsv[0] - aHsv[0])
-        val hueDiff = minOf(rawHueDiff, 360f - rawHueDiff)
-        // Guarantee dual-tone Blinding Lights contrast when accent is too close to backdrop or muddy
-        val chosenAccent = if (hueDiff < 42f || aHsv[1] < 0.35f) {
-            if (pHsv[0] < 70f || pHsv[0] > 300f) {
-                0xFF7DD3FC.toInt() // Crisp electric sky-blue over warm/crimson/amber covers
-            } else {
-                0xFFFCD34D.toInt() // Rich luminous amber-gold over cool blue/teal/green covers
-            }
-        } else {
-            rawAccBoosted
-        }
+        // Use the album cover's own richest vibrant hue (no hardcoded sky-blue override)
+        val bestRaw = palette.vibrantSwatch?.rgb
+            ?: palette.lightVibrantSwatch?.rgb
+            ?: palette.darkVibrantSwatch?.rgb
+            ?: palette.dominantSwatch?.rgb
+            ?: rawAccent
         val finalHsv = FloatArray(3)
-        Color.colorToHSV(chosenAccent, finalHsv)
-        finalHsv[1] = finalHsv[1].coerceIn(0.68f, 0.94f)
+        Color.colorToHSV(bestRaw, finalHsv)
+        if (finalHsv[1] > 0.08f) {
+            finalHsv[1] = finalHsv[1].coerceIn(0.72f, 0.94f)
+        } else {
+            finalHsv[1] = 0.22f // Subtle cool-pearl tint only on pure grayscale covers
+            finalHsv[0] = 210f
+        }
         finalHsv[2] = finalHsv[2].coerceIn(0.88f, 0.98f)
         val accentGlow = Color.HSVToColor(finalHsv)
 
