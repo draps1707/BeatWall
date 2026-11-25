@@ -38,16 +38,18 @@ data class CircadianTheme(
 )
 
 class ArtEffectProcessor {
-    private val blurWidth = 360
-    private val blurHeight = 780
+    private val blurWidth = 720
+    private val blurHeight = 1560
+    private val circWidth = 1080
+    private val circHeight = 2340
     private val pool = arrayOf(
-        Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888),
-        Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888),
-        Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888)
+        Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.RGBA_F16),
+        Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.RGBA_F16),
+        Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.RGBA_F16)
     )
     private var poolIdx = 0
 
-    private val circadianBitmap = Bitmap.createBitmap(blurWidth, blurHeight, Bitmap.Config.ARGB_8888)
+    private val circadianBitmap = Bitmap.createBitmap(circWidth, circHeight, Bitmap.Config.RGBA_F16)
     private var cachedCircadianTheme: CircadianTheme? = null
 
     private data class SkyAnchor(val minute: Int, val primary: Int, val secondary: Int, val accent: Int)
@@ -92,31 +94,31 @@ class ArtEffectProcessor {
 
         val g1 = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
             shader = RadialGradient(
-                blurWidth * 0.28f, blurHeight * 0.30f, blurWidth * 1.1f,
+                circWidth * 0.28f, circHeight * 0.30f, circWidth * 1.1f,
                 intArrayOf(withAlpha(primary, 210), Color.TRANSPARENT),
                 null, Shader.TileMode.CLAMP
             )
         }
         val g2 = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
             shader = RadialGradient(
-                blurWidth * 0.76f, blurHeight * 0.68f, blurWidth * 1.1f,
+                circWidth * 0.76f, circHeight * 0.68f, circWidth * 1.1f,
                 intArrayOf(withAlpha(secondary, 200), Color.TRANSPARENT),
                 null, Shader.TileMode.CLAMP
             )
         }
-        canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), g1)
-        canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), g2)
+        canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), g1)
+        canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), g2)
 
         val vignettePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
             shader = LinearGradient(
-                0f, 0f, 0f, blurHeight.toFloat(),
+                0f, 0f, 0f, circHeight.toFloat(),
                 intArrayOf(0x88040508.toInt(), 0x18000000, 0x18000000, 0xAA040508.toInt()),
                 floatArrayOf(0f, 0.28f, 0.72f, 1f),
                 Shader.TileMode.CLAMP
             )
         }
-        canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), vignettePaint)
-        canvas.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), grainPaint)
+        canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), vignettePaint)
+        canvas.drawRect(0f, 0f, circWidth.toFloat(), circHeight.toFloat(), grainPaint)
 
         return CircadianTheme(minuteOfDay, circadianBitmap, primary, secondary, accent).also {
             cachedCircadianTheme = it
@@ -177,7 +179,7 @@ class ArtEffectProcessor {
         primaryGlow: Int,
         secondaryGlow: Int
     ) {
-        val blurred = gpuBlurToBitmap(src, blurWidth, blurHeight, radius = 38f)
+        val blurred = gpuBlurToBitmap(src, blurWidth, blurHeight, radius = 72f)
         val canvas = Canvas(dest)
         canvas.drawColor(0xFF05060A.toInt())
 
@@ -270,6 +272,7 @@ class ArtEffectProcessor {
         val y = (src.height - side) / 2
         val cropped = Bitmap.createBitmap(src, x, y, side, side)
         val scaled = Bitmap.createScaledBitmap(cropped, size, size, true)
+        scaled.setHasMipMap(true)
         if (cropped !== src && cropped !== scaled) cropped.recycle()
         return scaled
     }
