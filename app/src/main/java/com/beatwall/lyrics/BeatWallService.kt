@@ -1041,15 +1041,26 @@ class BeatWallService : WallpaperService() {
                     }
                 }
 
-                // Crepuscular Sunbeams when a cloud drifts near the Sun
+                // Soft atmospheric sun-wash glow when a cloud drifts near the Sun
                 if (nearSunBeam > 0.05f && sky.sunAltDeg > 4f) {
-                    baselinePaint.strokeWidth = width * 0.045f
-                    baselinePaint.color = sky.sunColor
-                    baselinePaint.alpha = (masterAlpha * 0.055f * nearSunBeam).toInt().coerceIn(0, 255)
-                    for (ray in -1..1) {
-                        val endX = sunX + ray * width * 0.18f + (sunX - width * 0.5f) * 0.15f
-                        canvas.drawLine(sunX, sunY, endX, horizonY, baselinePaint)
-                    }
+                    val spanY = (horizonY - sunY).coerceAtLeast(height * 0.08f)
+                    val driftX = (sunX - width * 0.5f) * 0.08f
+                    val upperAlpha = (masterAlpha * 0.055f * nearSunBeam).toInt().coerceIn(0, 255)
+                    val lowerAlpha = (masterAlpha * 0.035f * nearSunBeam).toInt().coerceIn(0, 255)
+                    drawSoftOval(
+                        sunX + driftX * 0.5f,
+                        sunY + spanY * 0.34f,
+                        width * 0.20f,
+                        spanY * 0.40f,
+                        sunRimRgb or (upperAlpha shl 24)
+                    )
+                    drawSoftOval(
+                        sunX + driftX,
+                        sunY + spanY * 0.64f,
+                        width * 0.28f,
+                        spanY * 0.38f,
+                        sunRimRgb or (lowerAlpha shl 24)
+                    )
                 }
 
                 // 4-Gull distant thermal-soaring V-flock
