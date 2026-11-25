@@ -940,10 +940,10 @@ class BeatWallService : WallpaperService() {
             if (isDay) {
                 val cloudTint = ColorUtils.blendARGB(Color.WHITE, circ.horizonColor, 0.22f) and 0x00FFFFFF
                 for (c in 0 until 3) {
-                    val speed = 0.0028f + c * 0.0012f
+                    val speed = 0.0062f + c * 0.0016f
                     val cx = (((0.18f + c * 0.36f + (timeSec * speed).toFloat()) % 1.48f) - 0.24f) * width
                     val cy = height * (0.26f + c * 0.11f)
-                    val baseAlpha = (masterAlpha * (0.16f - c * 0.03f)).toInt().coerceIn(0, 255)
+                    val baseAlpha = (masterAlpha * (0.24f - c * 0.04f)).toInt().coerceIn(0, 255)
                     val col = cloudTint or (baseAlpha shl 24)
                     drawSoftOval(cx, cy, width * 0.30f, height * 0.032f, col)
                     drawSoftOval(cx - width * 0.10f, cy - height * 0.010f, width * 0.18f, height * 0.024f, col)
@@ -954,10 +954,10 @@ class BeatWallService : WallpaperService() {
                 baselinePaint.strokeWidth = density * 1.15f
                 baselinePaint.color = 0xFF1E293B.toInt()
                 for (g in 0 until 2) {
-                    val gx = (((0.25f + g * 0.11f + (timeSec * 0.0085).toFloat()) % 1.24f) - 0.12f) * width
-                    val gy = height * (0.31f + g * 0.026f) - sin(timeSec * 0.5 + g).toFloat() * (height * 0.006f)
-                    val span = width * (0.014f - g * 0.003f)
-                    val flap = sin(timeSec * 3.0 + g * 1.4).toFloat() * (span * 0.34f)
+                    val gx = (((0.25f + g * 0.11f + (timeSec * 0.016).toFloat()) % 1.24f) - 0.12f) * width
+                    val gy = height * (0.31f + g * 0.026f) - sin(timeSec * 0.8 + g).toFloat() * (height * 0.008f)
+                    val span = width * (0.015f - g * 0.003f)
+                    val flap = sin(timeSec * 2.8 + g * 1.4).toFloat() * (span * 0.38f)
                     baselinePaint.alpha = (masterAlpha * 0.40f).toInt()
                     canvas.drawLine(gx - span, gy - flap, gx, gy + span * 0.22f, baselinePaint)
                     canvas.drawLine(gx, gy + span * 0.22f, gx + span, gy - flap, baselinePaint)
@@ -987,8 +987,8 @@ class BeatWallService : WallpaperService() {
             }
 
             // 5. Tiny Distant Sailboat Silhouette Drifting Slowly on the Sea
-            val boatX = (((0.20f + (timeSec * 0.0035).toFloat()) % 1.16f) - 0.08f) * width
-            val boatBob = sin(timeSec * 1.1).toFloat() * (density * 0.9f)
+            val boatX = (((0.20f + (timeSec * 0.0060).toFloat()) % 1.16f) - 0.08f) * width
+            val boatBob = sin(timeSec * 1.5).toFloat() * (density * 1.8f)
             val boatY = horizonY + height * 0.013f + boatBob
             val boatCol = if (isDay) 0xFF0F172A.toInt() else 0xFF020617.toInt()
             eqBarPaint.color = boatCol
@@ -1004,15 +1004,30 @@ class BeatWallService : WallpaperService() {
             moonPath.close()
             canvas.drawPath(moonPath, eqBarPaint)
 
-            // 6. Calm, Slow, Feathered Ocean Swells (~28 seconds per gentle swell, zero hard wires!)
+            // 6. Calm, Noticeable Ocean Swells (~16.5s per swell: soft glow band + delicate translucent foam crest)
             val swellRgb = if (isDay) 0x00E0F2FE else 0x0022D3EE
+            val steps = 28
             for (wIdx in 0 until 2) {
-                val waveProg = (((timeSec * 0.036) + wIdx * 0.5) % 1.0).toFloat()
-                val wy = horizonY + (shoreY - horizonY) * (0.16f + waveProg * 0.80f)
-                val waveAlpha = sin(waveProg * PI).toFloat() * (if (isDay) 0.16f else 0.12f)
-                val wAlphaInt = (masterAlpha * waveAlpha).toInt().coerceIn(0, 255)
-                if (wAlphaInt > 2) {
-                    drawSoftOval(width * 0.5f, wy, width * 0.72f, height * 0.014f, swellRgb or (wAlphaInt shl 24))
+                val waveProg = (((timeSec * 0.060) + wIdx * 0.5) % 1.0).toFloat()
+                val wy = horizonY + (shoreY - horizonY) * (0.15f + waveProg * 0.82f)
+                val env = sin(waveProg * PI).toFloat()
+                val glowAlpha = (masterAlpha * env * (if (isDay) 0.18f else 0.14f)).toInt().coerceIn(0, 255)
+                if (glowAlpha > 2) {
+                    drawSoftOval(width * 0.5f, wy, width * 0.68f, height * 0.012f, swellRgb or (glowAlpha shl 24))
+                }
+                val crestAlpha = (masterAlpha * env * (if (isDay) 0.30f else 0.22f)).toInt().coerceIn(0, 255)
+                if (crestAlpha > 2) {
+                    baselinePaint.strokeWidth = density * 1.15f
+                    baselinePaint.color = if (isDay) 0xFFF8FAFC.toInt() else 0xFF22D3EE.toInt()
+                    baselinePaint.alpha = crestAlpha
+                    moonPath.reset()
+                    for (k in 0..steps) {
+                        val fx = k.toFloat() / steps
+                        val wx = fx * width
+                        val dy = sin(fx * 2.2 * PI + timeSec * 0.7 + wIdx * 1.8).toFloat() * (height * 0.005f)
+                        if (k == 0) moonPath.moveTo(wx, wy + dy) else moonPath.lineTo(wx, wy + dy)
+                    }
+                    canvas.drawPath(moonPath, baselinePaint)
                 }
             }
         }
@@ -1235,11 +1250,11 @@ class BeatWallService : WallpaperService() {
             alpha: Int
         ) {
             val barCount = 5
-            val barW = width * 0.0046f
-            val barGap = width * 0.0105f
-            val maxBarH = width * 0.019f
+            val barW = width * 0.0055f
+            val barGap = width * 0.013f
+            val maxBarH = width * 0.036f
             val eqSpan = (barCount - 1) * barGap + barW
-            val padGap = width * 0.010f
+            val padGap = width * 0.011f
             val posX = startX + (totalW - eqSpan).coerceAtLeast(0f) * progressFrac.coerceIn(0f, 1f)
 
             baselinePaint.strokeWidth = width * 0.0026f
@@ -1252,12 +1267,13 @@ class BeatWallService : WallpaperService() {
                 canvas.drawLine(startX, centerY, playedEnd, centerY, baselinePaint)
             }
 
-            // 5-Bar Equalizer sitting at current song timestamp
+            // 5-Bar Breathing Equalizer sitting at current song timestamp
             eqBarPaint.color = accent
-            eqBarPaint.alpha = (alpha * (0.45f + 0.50f * ampScale)).toInt().coerceIn(0, 255)
+            eqBarPaint.alpha = (alpha * (0.45f + 0.52f * ampScale)).toInt().coerceIn(0, 255)
+            val breathEnv = 0.75f + 0.25f * sin(timeSec * 2.1).toFloat()
             for (b in 0 until barCount) {
                 val wave = if (ampScale > 0.01f) {
-                    0.25f + 0.75f * ((sin(timeSec * 3.8 + b * 0.95) + 1.0) * 0.5).toFloat()
+                    0.15f + 0.85f * ((sin(timeSec * 5.2 + b * 1.15) + 1.0) * 0.5).toFloat() * breathEnv
                 } else {
                     0f
                 }

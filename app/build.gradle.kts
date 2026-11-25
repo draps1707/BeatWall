@@ -11,8 +11,8 @@ android {
         applicationId = "com.beatwall.lyrics"
         minSdk = 31
         targetSdk = 35
-        versionCode = 27
-        versionName = "5.0.0"
+        versionCode = 29
+        versionName = "5.0.2"
     }
 
     signingConfigs {
