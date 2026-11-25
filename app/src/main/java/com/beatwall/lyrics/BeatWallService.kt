@@ -9,6 +9,7 @@ import android.content.IntentFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PathMeasure
@@ -30,6 +31,7 @@ import android.view.Choreographer
 import android.view.Surface
 import android.view.SurfaceHolder
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
 import java.util.Calendar
 import kotlin.math.PI
 import kotlin.math.abs
@@ -81,16 +83,19 @@ class BeatWallService : WallpaperService() {
 
         private var lyricsAlpha = 0f
         private var targetLyricsAlpha = 0f
-        private var noteAmp = 0f
-        private var targetNoteAmp = 0f
-        private var headerNoteStyle = 0
+        private var eqAmp = 0f
+        private var targetEqAmp = 0f
 
         private var centeredLayouts: List<StaticLayout> = emptyList()
         private var lyricYCenters: FloatArray = FloatArray(0)
+        private var lyricMaxLineW: FloatArray = FloatArray(0)
+        private var avgLineStep = 140f
+
         private var prevCenteredLayouts: List<StaticLayout> = emptyList()
         private var prevLyricYCenters: FloatArray = FloatArray(0)
+        private var prevLyricMaxLineW: FloatArray = FloatArray(0)
+        private var prevAvgLineStep = 140f
         private var prevSpringY = 0f
-        private var prevCurrentLineIndex = -1
         private var prevLyricsAlpha = 0f
         private var measuredTrackKey: String? = null
 
@@ -122,6 +127,15 @@ class BeatWallService : WallpaperService() {
                 starPhase[i] = rng.nextFloat() * (2f * PI.toFloat())
             }
         }
+
+        // Reusable shader & matrix cache (zero per-frame allocations at 120 Hz)
+        private val shaderMatrix = Matrix()
+        private var cachedBacklightColor = 0
+        private var cachedBacklightShader: RadialGradient? = null
+        private var cachedSpotlightColor = 0
+        private var cachedSpotlightShader: RadialGradient? = null
+        private var cachedSweepKey = 0L
+        private var cachedSweepShader: LinearGradient? = null
 
         private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply {
             isDither = true
@@ -157,23 +171,13 @@ class BeatWallService : WallpaperService() {
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
         }
-        private val noteVectorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-        }
-        private val noteGlyphPaint = TextPaint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
-            textAlign = Paint.Align.CENTER
-            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+        private val eqBarPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
         }
         private val spotlightPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
             isDither = true
         }
         private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val interludeGlyphPaint = TextPaint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
-            textAlign = Paint.Align.CENTER
-            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-        }
 
         private val headerTitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
             color = Color.WHITE
@@ -194,24 +198,25 @@ class BeatWallService : WallpaperService() {
             typeface = Typeface.create("sans-serif", Typeface.BOLD)
             isDither = true
         }
+        private val studioTimerPaint = TextPaint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
+            color = 0xCCFFFFFF.toInt()
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            textAlign = Paint.Align.CENTER
+            letterSpacing = 0.08f
+        }
 
         private val clipPath = Path()
         private val coverRimPath = Path()
         private val coverProgressPath = Path()
         private val pathMeasure = PathMeasure()
-        private val swirlPath = Path()
-        private val clefPath = Path()
         private val moonPath = Path()
         private val moonCutPath = Path()
         private val miniArtRect = RectF()
+        private val eqBarRect = RectF()
         private val arcRect = RectF()
         private val backdropRect = RectF()
         private val lockLyricsClip = RectF()
         private val homeLyricsClip = RectF()
-
-        // 7 guaranteed Android BMP musical glyphs + 2 custom Path vector symbols (index 7: Treble Clef, index 8: Swirl)
-        private val noteGlyphs = arrayOf("♪", "♫", "♬", "♩", "♭", "♮", "♯", "CLEF", "SWIRL")
-        private val interludeNotes = arrayOf("♪", "♫", "♬")
 
         private val systemReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
@@ -277,14 +282,7 @@ class BeatWallService : WallpaperService() {
                 isCharging = batteryManager.isCharging
                 isLowBattery = (!isCharging && pct in 0..14) || powerManager.isPowerSaveMode
             }
-            targetNoteAmp = if (activeState?.isPlaying == true && !isLowBattery) 1f else 0f
-        }
-
-        private val studioTimerPaint = TextPaint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
-            color = 0xCCFFFFFF.toInt()
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            textAlign = Paint.Align.CENTER
-            letterSpacing = 0.08f
+            targetEqAmp = if (activeState?.isPlaying == true && !isLowBattery) 1f else 0f
         }
 
         private fun currentDayOfMonth(): Int = Calendar.getInstance().get(Calendar.DAY_OF_MONTH)
@@ -364,8 +362,9 @@ class BeatWallService : WallpaperService() {
                         prevState = activeState
                         prevCenteredLayouts = centeredLayouts
                         prevLyricYCenters = lyricYCenters
+                        prevLyricMaxLineW = lyricMaxLineW
+                        prevAvgLineStep = avgLineStep
                         prevSpringY = springY
-                        prevCurrentLineIndex = currentLineIndex
                         prevLyricsAlpha = lyricsAlpha
                         crossfadeProgress = 0f
                         crossfadeStartNanos = 0L
@@ -377,16 +376,14 @@ class BeatWallService : WallpaperService() {
                     if (state?.showLyrics != true || state.lyrics.isEmpty()) {
                         lyricsAlpha = 0f
                     }
-                    if (state != null) {
-                        headerNoteStyle = (headerNoteStyle + 1 + Random.nextInt(3)) % 4
-                    }
                     proceduralAnimator.reroll(calmOnly = state == null)
                 } else if (artChanged && crossfadeProgress >= 1f && activeState != null) {
                     prevState = activeState
                     prevCenteredLayouts = centeredLayouts
                     prevLyricYCenters = lyricYCenters
+                    prevLyricMaxLineW = lyricMaxLineW
+                    prevAvgLineStep = avgLineStep
                     prevSpringY = springY
-                    prevCurrentLineIndex = currentLineIndex
                     prevLyricsAlpha = lyricsAlpha
                     crossfadeProgress = 0f
                     crossfadeStartNanos = 0L
@@ -394,10 +391,10 @@ class BeatWallService : WallpaperService() {
 
                 activeState = state
                 targetLyricsAlpha = if (state?.showLyrics == true && state.lyrics.isNotEmpty()) 1f else 0f
-                targetNoteAmp = if (state?.isPlaying == true && !isLowBattery) 1f else 0f
+                targetEqAmp = if (state?.isPlaying == true && !isLowBattery) 1f else 0f
                 if (prevKey == null && state == null) {
                     lyricsAlpha = 0f
-                    noteAmp = 0f
+                    eqAmp = 0f
                 }
                 if (artChanged) {
                     try {
@@ -438,7 +435,7 @@ class BeatWallService : WallpaperService() {
             if (p75Width <= 1f) return width * 0.084f
 
             val idealSize = refSize * ((contentW * 0.84f) / p75Width)
-            return idealSize.coerceIn(width * 0.062f, width * 0.088f)
+            return idealSize.coerceIn(width * 0.062f, width * 0.086f)
         }
 
         private fun rebuildLayoutsIfNeeded(force: Boolean) {
@@ -446,6 +443,7 @@ class BeatWallService : WallpaperService() {
             if (st == null || st.lyrics.isEmpty()) {
                 centeredLayouts = emptyList()
                 lyricYCenters = FloatArray(0)
+                lyricMaxLineW = FloatArray(0)
                 measuredTrackKey = null
                 return
             }
@@ -455,7 +453,7 @@ class BeatWallService : WallpaperService() {
             val contentW = (width * 0.88f).toInt().coerceAtLeast(220)
             val dynSize = computeDynamicLyricTextSize(st.lyrics, contentW)
             activeLyricPaint.textSize = dynSize
-            val lineGap = dynSize * 0.44f
+            val lineGap = dynSize * 0.58f
 
             centeredLayouts = st.lyrics.map { line ->
                 StaticLayout.Builder.obtain(line.text, 0, line.text.length, activeLyricPaint, contentW)
@@ -467,7 +465,16 @@ class BeatWallService : WallpaperService() {
                     .build()
             }
 
+            lyricMaxLineW = FloatArray(centeredLayouts.size) { i ->
+                val l = centeredLayouts[i]
+                (0 until l.lineCount).maxOfOrNull { l.getLineWidth(it) } ?: 0f
+            }
             lyricYCenters = computeYCenters(centeredLayouts, lineGap)
+            avgLineStep = if (lyricYCenters.size >= 2) {
+                ((lyricYCenters.last() - lyricYCenters.first()) / (lyricYCenters.size - 1)).coerceAtLeast(width * 0.13f)
+            } else {
+                width * 0.15f
+            }
         }
 
         private fun computeYCenters(layouts: List<StaticLayout>, gap: Float): FloatArray {
@@ -490,7 +497,7 @@ class BeatWallService : WallpaperService() {
             if (!visible || !surfaceReady || !powerManager.isInteractive) return false
             if (crossfadeProgress < 1f) return true
             if (abs(targetLyricsAlpha - lyricsAlpha) > 0.01f) return true
-            if (abs(targetNoteAmp - noteAmp) > 0.01f) return true
+            if (abs(targetEqAmp - eqAmp) > 0.01f) return true
             if (isLowBattery) return false
             val st = activeState
             if (st != null && !st.isPlaying) return false
@@ -502,7 +509,7 @@ class BeatWallService : WallpaperService() {
             return if (
                 crossfadeProgress < 1f ||
                 abs(targetLyricsAlpha - lyricsAlpha) > 0.01f ||
-                abs(targetNoteAmp - noteAmp) > 0.01f ||
+                abs(targetEqAmp - eqAmp) > 0.01f ||
                 activeState?.isPlaying == true
             ) {
                 120f
@@ -576,6 +583,7 @@ class BeatWallService : WallpaperService() {
                         prevState = null
                         prevCenteredLayouts = emptyList()
                         prevLyricYCenters = FloatArray(0)
+                        prevLyricMaxLineW = FloatArray(0)
                     }
                 }
 
@@ -588,14 +596,14 @@ class BeatWallService : WallpaperService() {
                     lyricsAlpha = targetLyricsAlpha
                 }
 
-                targetNoteAmp = if (activeState?.isPlaying == true && !isLowBattery) 1f else 0f
-                val noteDiff = targetNoteAmp - noteAmp
-                if (abs(noteDiff) > 0.01f) {
-                    val step = (dtSec / 0.32f) * if (noteDiff > 0) 1f else -1f
-                    noteAmp = (noteAmp + step).coerceIn(0f, 1f)
-                    if (abs(targetNoteAmp - noteAmp) <= 0.02f) noteAmp = targetNoteAmp
+                targetEqAmp = if (activeState?.isPlaying == true && !isLowBattery) 1f else 0f
+                val eqDiff = targetEqAmp - eqAmp
+                if (abs(eqDiff) > 0.01f) {
+                    val step = (dtSec / 0.30f) * if (eqDiff > 0) 1f else -1f
+                    eqAmp = (eqAmp + step).coerceIn(0f, 1f)
+                    if (abs(targetEqAmp - eqAmp) <= 0.02f) eqAmp = targetEqAmp
                 } else {
-                    noteAmp = targetNoteAmp
+                    eqAmp = targetEqAmp
                 }
 
                 val st = activeState
@@ -732,6 +740,8 @@ class BeatWallService : WallpaperService() {
             val lyrAlpha = (masterAlpha * (if (isCurrent) lyricsAlpha else prevLyricsAlpha)).toInt().coerceIn(0, 255)
             val layouts = if (isCurrent) centeredLayouts else prevCenteredLayouts
             val centers = if (isCurrent) lyricYCenters else prevLyricYCenters
+            val maxWidths = if (isCurrent) lyricMaxLineW else prevLyricMaxLineW
+            val stepPx = if (isCurrent) avgLineStep else prevAvgLineStep
             val yScroll = if (isCurrent) springY else prevSpringY
             val clipRect = if (isLock) lockLyricsClip else homeLyricsClip
             val centerY = if (isLock) height * 0.572f else height * 0.49f
@@ -743,6 +753,8 @@ class BeatWallService : WallpaperService() {
                     state = state,
                     layouts = layouts,
                     yCenters = centers,
+                    maxLineWidths = maxWidths,
+                    lineStepPx = stepPx,
                     scrollY = yScroll,
                     centerX = centerX,
                     centerY = centerY,
@@ -894,7 +906,6 @@ class BeatWallService : WallpaperService() {
             orbPaint.shader = null
 
             if (isDay) {
-                // Multi-layered Solar Corona + Crisp Solar Disc
                 orbPaint.color = 0xFFFDE68A.toInt()
                 orbPaint.alpha = (masterAlpha * 0.35f).toInt()
                 canvas.drawCircle(orbX, orbY, width * 0.032f, orbPaint)
@@ -903,7 +914,6 @@ class BeatWallService : WallpaperService() {
                 canvas.drawCircle(orbX, orbY, width * 0.019f, orbPaint)
             } else {
                 val r = width * 0.024f
-                // Subtle earthshine on dark side of the Moon
                 orbPaint.color = Color.WHITE
                 orbPaint.alpha = (masterAlpha * 0.12f).toInt()
                 canvas.drawCircle(orbX, orbY, r, orbPaint)
@@ -932,7 +942,6 @@ class BeatWallService : WallpaperService() {
             val cx = width * 0.50f
             val sep = width * 0.11f
 
-            // Alternating Two-Host Conversation Orbs (Cyan Host A + Indigo Host B)
             val turnA = if (isPlaying) 0.55f + 0.45f * sin(timeSec * 2.4).toFloat() else 0.45f
             val turnB = if (isPlaying) 0.55f + 0.45f * sin(timeSec * 2.4 + PI).toFloat() else 0.45f
 
@@ -1032,12 +1041,26 @@ class BeatWallService : WallpaperService() {
 
             if (art != null) {
                 miniArtRect.set(leftMargin, headerTop, leftMargin + thumbSize, headerTop + thumbSize)
-                backlightPaint.shader = RadialGradient(
-                    miniArtRect.centerX(), miniArtRect.centerY(), thumbSize * 1.15f,
-                    intArrayOf((primary and 0x00FFFFFF) or (((headerAlpha * 0.36f).toInt()) shl 24), Color.TRANSPARENT),
-                    null, Shader.TileMode.CLAMP
-                )
-                canvas.drawCircle(miniArtRect.centerX(), miniArtRect.centerY(), thumbSize * 1.15f, backlightPaint)
+                val backColor = (primary and 0x00FFFFFF) or (((headerAlpha * 0.36f).toInt()) shl 24)
+                val backShader = if (cachedBacklightColor == backColor && cachedBacklightShader != null) {
+                    cachedBacklightShader!!
+                } else {
+                    RadialGradient(
+                        0f, 0f, 1f,
+                        intArrayOf(backColor, Color.TRANSPARENT),
+                        null, Shader.TileMode.CLAMP
+                    ).also {
+                        cachedBacklightColor = backColor
+                        cachedBacklightShader = it
+                    }
+                }
+                val backR = thumbSize * 1.15f
+                shaderMatrix.reset()
+                shaderMatrix.setScale(backR, backR)
+                shaderMatrix.postTranslate(miniArtRect.centerX(), miniArtRect.centerY())
+                backShader.setLocalMatrix(shaderMatrix)
+                backlightPaint.shader = backShader
+                canvas.drawCircle(miniArtRect.centerX(), miniArtRect.centerY(), backR, backlightPaint)
                 backlightPaint.shader = null
 
                 val radius = thumbSize * 0.18f
@@ -1078,8 +1101,8 @@ class BeatWallService : WallpaperService() {
 
             val titleH = titleLayout.height.toFloat()
             val artistH = headerArtistPaint.fontSpacing
-            val noteRowOffset = thumbSize * 0.15f
-            val totalBlockH = titleH + artistH * 0.92f + noteRowOffset
+            val eqRowOffset = thumbSize * 0.15f
+            val totalBlockH = titleH + artistH * 0.92f + eqRowOffset
             val blockTop = (headerTop + (thumbSize - totalBlockH) * 0.5f).coerceAtLeast(headerTop - thumbSize * 0.04f)
 
             canvas.save()
@@ -1098,140 +1121,56 @@ class BeatWallService : WallpaperService() {
                 headerArtistPaint
             )
 
-            // 4-Style Musical Note Visualizer along calm baseline (melts smoothly into baseline when paused)
-            drawMusicalNotesBar(
+            // Option 2: 5-Bar Micro Silk Equalizer on left + calm hairline
+            drawMicroSilkEqualizer(
                 canvas = canvas,
                 timeSec = timeSec,
                 startX = textLeft,
-                baseY = artistBaselineY + noteRowOffset,
-                barW = maxTextW,
-                ampScale = noteAmp,
+                centerY = artistBaselineY + eqRowOffset,
+                totalW = maxTextW,
+                ampScale = eqAmp,
                 accent = accent,
                 alpha = headerAlpha
             )
         }
 
-        private fun drawMusicalNotesBar(
+        private fun drawMicroSilkEqualizer(
             canvas: Canvas,
             timeSec: Double,
             startX: Float,
-            baseY: Float,
-            barW: Float,
+            centerY: Float,
+            totalW: Float,
             ampScale: Float,
             accent: Int,
             alpha: Int
         ) {
-            baselinePaint.strokeWidth = width * 0.0026f
-            baselinePaint.color = accent
-            baselinePaint.alpha = (alpha * (0.34f - 0.10f * ampScale)).toInt().coerceIn(0, 255)
-            canvas.drawLine(startX, baseY, startX + barW, baseY, baselinePaint)
+            val barCount = 5
+            val barW = width * 0.0046f
+            val barGap = width * 0.011f
+            val maxBarH = width * 0.019f
+            val eqSpan = barCount * barGap
 
-            if (ampScale <= 0.01f) return
+            eqBarPaint.color = accent
+            eqBarPaint.alpha = (alpha * (0.42f + 0.50f * ampScale)).toInt().coerceIn(0, 255)
 
-            val noteSize = width * 0.030f
-            val bounceAmp = width * 0.011f * ampScale
-            noteGlyphPaint.textSize = noteSize
-            noteGlyphPaint.color = accent
-            noteVectorPaint.color = accent
-            noteVectorPaint.strokeWidth = width * 0.0028f
-
-            when (headerNoteStyle) {
-                0, 2 -> {
-                    // Style 0 & 2: Drifting Sheet-Music Stream (left -> right while bobbing out of phase)
-                    val slots = 6
-                    val drift = (timeSec * 0.14) % 1.0
-                    for (s in 0 until slots) {
-                        val rawPos = (s.toDouble() / slots + drift)
-                        val cycleIdx = kotlin.math.floor(rawPos).toInt()
-                        val frac = (rawPos - cycleIdx).toFloat()
-                        val edgeFade = sin(frac * PI).toFloat().coerceIn(0f, 1f)
-                        val x = startX + frac * barW
-                        val y = baseY - (width * 0.006f * ampScale) +
-                            sin(timeSec * 3.4 + s * 1.25).toFloat() * bounceAmp
-                        val symIdx = (s + cycleIdx * 3) % noteGlyphs.size
-                        val noteAlpha = (alpha * 0.90f * ampScale * edgeFade).toInt().coerceIn(0, 255)
-                        drawMusicalSymbol(canvas, symIdx, x, y, noteSize, noteAlpha)
-                    }
+            for (b in 0 until barCount) {
+                val wave = if (ampScale > 0.01f) {
+                    0.25f + 0.75f * ((sin(timeSec * 3.8 + b * 0.95) + 1.0) * 0.5).toFloat()
+                } else {
+                    0f
                 }
-                1 -> {
-                    // Style 1: Breathing Quartet (5 stationary notes bobbing & crossfading through all 9 symbols)
-                    val slots = 5
-                    val morphPos = (timeSec * 0.35)
-                    val morphBase = kotlin.math.floor(morphPos).toInt()
-                    val morphFrac = (morphPos - morphBase).toFloat()
-                    for (s in 0 until slots) {
-                        val frac = (s + 0.5f) / slots
-                        val x = startX + frac * barW
-                        val y = baseY - (width * 0.005f * ampScale) +
-                            sin(timeSec * 3.2 + s * 1.1).toFloat() * bounceAmp
-                        val idxA = (s * 2 + morphBase) % noteGlyphs.size
-                        val idxB = (s * 2 + morphBase + 1) % noteGlyphs.size
-                        val a1 = (alpha * 0.88f * ampScale * (1f - morphFrac)).toInt().coerceIn(0, 255)
-                        val a2 = (alpha * 0.88f * ampScale * morphFrac).toInt().coerceIn(0, 255)
-                        drawMusicalSymbol(canvas, idxA, x, y, noteSize, a1)
-                        drawMusicalSymbol(canvas, idxB, x, y, noteSize, a2)
-                    }
-                }
-                else -> {
-                    // Style 3: Swirling Riff Stream (notes + tapered arc trails gliding left -> right)
-                    val slots = 5
-                    val drift = (timeSec * 0.13) % 1.0
-                    for (s in 0 until slots) {
-                        val rawPos = (s.toDouble() / slots + drift)
-                        val cycleIdx = kotlin.math.floor(rawPos).toInt()
-                        val frac = (rawPos - cycleIdx).toFloat()
-                        val edgeFade = sin(frac * PI).toFloat().coerceIn(0f, 1f)
-                        val x = startX + frac * barW
-                        val y = baseY - (width * 0.006f * ampScale) +
-                            sin(timeSec * 3.1 + s * 1.4).toFloat() * bounceAmp
-                        val symIdx = (s * 2 + cycleIdx) % noteGlyphs.size
-                        val noteAlpha = (alpha * 0.88f * ampScale * edgeFade).toInt().coerceIn(0, 255)
-
-                        // Subtle tapered riff trail behind each note
-                        val trailLen = barW * 0.08f * edgeFade
-                        swirlPath.reset()
-                        swirlPath.moveTo((x - trailLen).coerceAtLeast(startX), baseY)
-                        swirlPath.quadTo(x - trailLen * 0.4f, y + bounceAmp * 0.4f, x - noteSize * 0.35f, y)
-                        noteVectorPaint.alpha = (noteAlpha * 0.45f).toInt()
-                        canvas.drawPath(swirlPath, noteVectorPaint)
-
-                        drawMusicalSymbol(canvas, symIdx, x, y, noteSize, noteAlpha)
-                    }
-                }
+                val bh = barW + (maxBarH - barW) * wave * ampScale
+                val bx = startX + b * barGap
+                eqBarRect.set(bx, centerY - bh * 0.5f, bx + barW, centerY + bh * 0.5f)
+                canvas.drawRoundRect(eqBarRect, barW * 0.5f, barW * 0.5f, eqBarPaint)
             }
-        }
 
-        private fun drawMusicalSymbol(
-            canvas: Canvas,
-            symIdx: Int,
-            x: Float,
-            y: Float,
-            size: Float,
-            alpha: Int
-        ) {
-            if (alpha <= 2) return
-            val sym = noteGlyphs[symIdx.coerceIn(0, noteGlyphs.lastIndex)]
-            if (sym == "CLEF") {
-                // Crisp vector treble-clef loop
-                noteVectorPaint.alpha = alpha
-                val r = size * 0.28f
-                clefPath.reset()
-                clefPath.moveTo(x - r * 0.1f, y + r * 1.15f)
-                clefPath.cubicTo(x + r * 0.9f, y + r * 1.0f, x + r * 0.9f, y - r * 0.1f, x, y - r * 0.25f)
-                clefPath.cubicTo(x - r * 0.95f, y - r * 0.4f, x - r * 0.85f, y - r * 1.35f, x + r * 0.15f, y - r * 1.45f)
-                clefPath.lineTo(x - r * 0.15f, y + r * 1.4f)
-                canvas.drawPath(clefPath, noteVectorPaint)
-            } else if (sym == "SWIRL") {
-                // Crisp vector musical flourish arc
-                noteVectorPaint.alpha = alpha
-                val r = size * 0.36f
-                swirlPath.reset()
-                swirlPath.moveTo(x - r, y + r * 0.45f)
-                swirlPath.cubicTo(x - r * 0.3f, y - r * 0.95f, x + r * 0.4f, y + r * 0.85f, x + r, y - r * 0.45f)
-                canvas.drawPath(swirlPath, noteVectorPaint)
-            } else {
-                noteGlyphPaint.alpha = alpha
-                canvas.drawText(sym, x, y + size * 0.32f, noteGlyphPaint)
+            val lineStart = startX + eqSpan + width * 0.012f
+            if (lineStart < startX + totalW) {
+                baselinePaint.strokeWidth = width * 0.0026f
+                baselinePaint.color = accent
+                baselinePaint.alpha = (alpha * 0.24f).toInt().coerceIn(0, 255)
+                canvas.drawLine(lineStart, centerY, startX + totalW, centerY, baselinePaint)
             }
         }
 
@@ -1299,6 +1238,8 @@ class BeatWallService : WallpaperService() {
             state: ActiveTrackState,
             layouts: List<StaticLayout>,
             yCenters: FloatArray,
+            maxLineWidths: FloatArray,
+            lineStepPx: Float,
             scrollY: Float,
             centerX: Float,
             centerY: Float,
@@ -1311,7 +1252,6 @@ class BeatWallService : WallpaperService() {
             val maxIdx = minOf(layouts.lastIndex, state.lyrics.lastIndex, yCenters.lastIndex)
             if (maxIdx < 0) return
 
-            // Find closest continuous line index for draw window without snapping visuals
             val approxIdx = LrcParser.findLineIndex(state.lyrics, state.currentPositionMs()).coerceIn(0, maxIdx)
             val start = (approxIdx - 4).coerceAtLeast(0)
             val end = (approxIdx + 4).coerceAtMost(maxIdx)
@@ -1321,95 +1261,81 @@ class BeatWallService : WallpaperService() {
             val posMs = state.currentPositionMs()
             val isPlaying = state.isPlaying && !isLowBattery
 
+            // Album-art pastel-tinted lyric colors (75% white + 25% accent for sung; 55% white + 45% accent for unsung)
+            val sungRgb = ColorUtils.blendARGB(Color.WHITE, accentColor, 0.25f) and 0x00FFFFFF
+            val dimRgb = ColorUtils.blendARGB(Color.WHITE, accentColor, 0.45f) and 0x00FFFFFF
+
             for (i in start..end) {
                 val layout = layouts[i]
                 val lineOffset = yCenters[i] - scrollY
                 val yPos = centerY + lineOffset - (layout.height / 2f)
 
-                // Smoothstep outer-edge mist fade (zero clipRect hard lines)
                 val topFade = smoothstep((yPos - clipTop) / mistZone)
                 val botFade = smoothstep((clipBottom - (yPos + layout.height)) / mistZone)
                 val mistFactor = minOf(topFade, botFade)
                 if (mistFactor <= 0.005f) continue
 
-                // Continuous Float distance drives diagonal drift, 3D scale, and opacity with ZERO snapping
-                val normDist = (abs(lineOffset) / (clipH * 0.46f)).coerceIn(0f, 1.2f)
-                val relY = (lineOffset / (clipH * 0.50f)).coerceIn(-1.2f, 1.2f)
-                val dx = -relY * (width * 0.09f)
-
-                val focusStrength = (1f - smoothstep((normDist * 2.6f).coerceIn(0f, 1f)))
-                val distFade = 1f - 0.88f * smoothstep((normDist * 1.12f).coerceIn(0f, 1f))
+                // Continuous distance in line-spacing units (0.0 at center, 1.0 at ±1 line, 2.0 at ±2, etc.)
+                val stepDist = abs(lineOffset) / lineStepPx.coerceAtLeast(1f)
+                val focusStrength = 1f - smoothstep((stepDist / 0.65f).coerceIn(0f, 1f))
+                val distFade = (1f / (1f + 1.15f * stepDist * stepDist)).coerceIn(0.05f, 1.0f)
                 val pausedScale = if (isPlaying) 1.0f else 0.72f
                 val lineAlpha = (masterAlpha * distFade * mistFactor * pausedScale).toInt().coerceIn(0, 255)
                 if (lineAlpha <= 2) continue
 
-                val scale = (1.06f - 0.50f * smoothstep(normDist.coerceIn(0f, 1f))).coerceIn(0.55f, 1.06f)
+                // Left-aligned (bottom-left) -> Center-aligned (focus) -> Right-aligned (top-right)
+                val relY = (lineOffset / (clipH * 0.48f)).coerceIn(-1.2f, 1.2f)
+                val maxLw = if (i in maxLineWidths.indices) maxLineWidths[i] else 0f
+                val alignBias = -relY.coerceIn(-1f, 1f)
+                val alignShift = alignBias * ((layout.width - maxLw) * 0.44f).coerceAtLeast(0f)
+                val diagShift = -relY * (width * 0.12f) * (1f - (maxLw / layout.width.coerceAtLeast(1)).coerceIn(0f, 0.85f) * 0.5f)
+                val dx = alignShift + diagShift
+
+                val scale = (1.06f - 0.50f * smoothstep((stepDist / 3.2f).coerceIn(0f, 1f))).coerceIn(0.55f, 1.06f)
 
                 canvas.save()
                 canvas.translate(centerX + dx, yPos)
                 canvas.scale(scale, scale, layout.width / 2f, layout.height / 2f)
 
                 if (state.lyrics[i].isInterlude) {
-                    if (headerNoteStyle == 2) {
-                        // Style 2 (Option C): Musical interlude notes ♪ ♫ ♬
-                        val noteGap = width * 0.055f
-                        val baseX = layout.width / 2f
-                        val noteY = layout.height / 2f
-                        interludeGlyphPaint.textSize = width * 0.048f
-                        interludeGlyphPaint.color = accentColor
-                        for (d in -1..1) {
-                            if (isPlaying) {
-                                val phase = timeSec * 3.0 - (d + 1) * 0.9
-                                val wave = 0.40f + 0.60f * ((sin(phase) + 1.0) * 0.5).toFloat()
-                                val bob = sin(phase).toFloat() * (width * 0.008f)
-                                interludeGlyphPaint.alpha = (lineAlpha * wave).toInt().coerceIn(20, 255)
-                                canvas.drawText(
-                                    interludeNotes[d + 1],
-                                    baseX + d * noteGap,
-                                    noteY + interludeGlyphPaint.textSize * 0.32f + bob,
-                                    interludeGlyphPaint
-                                )
-                            } else {
-                                interludeGlyphPaint.alpha = (lineAlpha * 0.45f).toInt().coerceIn(15, 255)
-                                canvas.drawText(
-                                    interludeNotes[d + 1],
-                                    baseX + d * noteGap,
-                                    noteY + interludeGlyphPaint.textSize * 0.32f,
-                                    interludeGlyphPaint
-                                )
-                            }
-                        }
-                    } else {
-                        dotPaint.color = accentColor
-                        val dotRadius = width * 0.012f
-                        val dotGap = width * 0.034f
-                        val baseX = layout.width / 2f
-                        val dotY = layout.height / 2f
-                        for (d in -1..1) {
-                            if (isPlaying) {
-                                val phase = timeSec * 3.2 - (d + 1) * 0.85
-                                val wave = 0.35f + 0.65f * ((sin(phase) + 1.0) * 0.5).toFloat()
-                                dotPaint.alpha = (lineAlpha * wave).toInt().coerceIn(20, 255)
-                                canvas.drawCircle(baseX + d * dotGap, dotY, dotRadius * (0.85f + 0.25f * wave), dotPaint)
-                            } else {
-                                dotPaint.alpha = (lineAlpha * 0.45f).toInt().coerceIn(15, 255)
-                                canvas.drawCircle(baseX + d * dotGap, dotY, dotRadius * 0.90f, dotPaint)
-                            }
+                    dotPaint.color = accentColor
+                    val dotRadius = width * 0.012f
+                    val dotGap = width * 0.034f
+                    val baseX = layout.width / 2f
+                    val dotY = layout.height / 2f
+                    for (d in -1..1) {
+                        if (isPlaying) {
+                            val phase = timeSec * 3.2 - (d + 1) * 0.85
+                            val wave = 0.35f + 0.65f * ((sin(phase) + 1.0) * 0.5).toFloat()
+                            dotPaint.alpha = (lineAlpha * wave).toInt().coerceIn(20, 255)
+                            canvas.drawCircle(baseX + d * dotGap, dotY, dotRadius * (0.85f + 0.25f * wave), dotPaint)
+                        } else {
+                            dotPaint.alpha = (lineAlpha * 0.45f).toInt().coerceIn(15, 255)
+                            canvas.drawCircle(baseX + d * dotGap, dotY, dotRadius * 0.90f, dotPaint)
                         }
                     }
-                } else if (focusStrength > 0.25f) {
-                    // Ultra-fast GPU RadialGradient spotlight behind focused line (zero setShadowLayer)
-                    if (isPlaying && focusStrength > 0.35f) {
-                        val spotR = maxOf(layout.width * 0.48f, layout.height * 1.4f)
-                        val spotAlpha = (lineAlpha * 0.22f * focusStrength).toInt().coerceIn(0, 255)
-                        spotlightPaint.shader = RadialGradient(
-                            layout.width / 2f,
-                            layout.height / 2f,
-                            spotR,
-                            intArrayOf((accentColor and 0x00FFFFFF) or (spotAlpha shl 24), Color.TRANSPARENT),
-                            null,
-                            Shader.TileMode.CLAMP
-                        )
+                } else if (focusStrength > 0.20f) {
+                    // Cached zero-alloc GPU RadialGradient spotlight behind focused line
+                    if (isPlaying && focusStrength > 0.30f) {
+                        val spotR = maxOf(layout.width * 0.46f, layout.height * 1.4f)
+                        val spotColor = (accentColor and 0x00FFFFFF) or (((lineAlpha * 0.22f * focusStrength).toInt().coerceIn(0, 255)) shl 24)
+                        val spotShader = if (cachedSpotlightColor == spotColor && cachedSpotlightShader != null) {
+                            cachedSpotlightShader!!
+                        } else {
+                            RadialGradient(
+                                0f, 0f, 1f,
+                                intArrayOf(spotColor, Color.TRANSPARENT),
+                                null, Shader.TileMode.CLAMP
+                            ).also {
+                                cachedSpotlightColor = spotColor
+                                cachedSpotlightShader = it
+                            }
+                        }
+                        shaderMatrix.reset()
+                        shaderMatrix.setScale(spotR, spotR)
+                        shaderMatrix.postTranslate(layout.width / 2f, layout.height / 2f)
+                        spotShader.setLocalMatrix(shaderMatrix)
+                        spotlightPaint.shader = spotShader
                         canvas.drawCircle(layout.width / 2f, layout.height / 2f, spotR, spotlightPaint)
                         spotlightPaint.shader = null
                     }
@@ -1431,8 +1357,21 @@ class BeatWallService : WallpaperService() {
                     var consumedW = 0f
                     val sungTargetW = totalW * totalSweepFrac
 
-                    val brightWhite = (0xFFFFFF) or (lineAlpha shl 24)
-                    val dimWhite = (0xFFFFFF) or (((lineAlpha * 0.48f).toInt()) shl 24)
+                    val brightTint = sungRgb or (lineAlpha shl 24)
+                    val dimAlphaTint = dimRgb or (((lineAlpha * 0.50f).toInt()) shl 24)
+                    val sweepKey = (brightTint.toLong() shl 32) or (dimAlphaTint.toLong() and 0xFFFFFFFFL)
+                    val baseSweepShader = if (cachedSweepKey == sweepKey && cachedSweepShader != null) {
+                        cachedSweepShader!!
+                    } else {
+                        LinearGradient(
+                            -1f, 0f, 1f, 0f,
+                            intArrayOf(brightTint, dimAlphaTint),
+                            null, Shader.TileMode.CLAMP
+                        ).also {
+                            cachedSweepKey = sweepKey
+                            cachedSweepShader = it
+                        }
+                    }
 
                     layout.paint.style = Paint.Style.FILL
                     for (l in 0 until lineCount) {
@@ -1449,21 +1388,18 @@ class BeatWallService : WallpaperService() {
 
                         if (localFrac <= 0.005f) {
                             layout.paint.shader = null
-                            layout.paint.color = Color.WHITE
-                            layout.paint.alpha = (lineAlpha * 0.48f).toInt()
+                            layout.paint.color = dimRgb or (((lineAlpha * 0.50f).toInt()) shl 24)
                         } else if (localFrac >= 0.995f) {
                             layout.paint.shader = null
-                            layout.paint.color = Color.WHITE
-                            layout.paint.alpha = lineAlpha
+                            layout.paint.color = brightTint
                         } else {
                             val sweepX = leftEdge + lw * localFrac
                             val softEdge = (lw * 0.16f).coerceAtLeast(22f)
-                            layout.paint.shader = LinearGradient(
-                                sweepX - softEdge, 0f, sweepX + softEdge, 0f,
-                                intArrayOf(brightWhite, dimWhite),
-                                null,
-                                Shader.TileMode.CLAMP
-                            )
+                            shaderMatrix.reset()
+                            shaderMatrix.setScale(softEdge, 1f)
+                            shaderMatrix.postTranslate(sweepX, 0f)
+                            baseSweepShader.setLocalMatrix(shaderMatrix)
+                            layout.paint.shader = baseSweepShader
                         }
                         layout.draw(canvas)
                         canvas.restore()
@@ -1472,8 +1408,7 @@ class BeatWallService : WallpaperService() {
                 } else {
                     layout.paint.shader = null
                     layout.paint.style = Paint.Style.FILL
-                    layout.paint.color = Color.WHITE
-                    layout.paint.alpha = lineAlpha
+                    layout.paint.color = dimRgb or (lineAlpha shl 24)
                     layout.draw(canvas)
                 }
 
