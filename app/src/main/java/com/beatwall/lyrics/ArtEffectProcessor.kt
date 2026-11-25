@@ -337,15 +337,20 @@ class ArtEffectProcessor {
         val rawHueDiff = abs(pHsv[0] - aHsv[0])
         val hueDiff = minOf(rawHueDiff, 360f - rawHueDiff)
         // Guarantee dual-tone Blinding Lights contrast when accent is too close to backdrop or muddy
-        val accentGlow = if (hueDiff < 42f || aHsv[1] < 0.35f) {
+        val chosenAccent = if (hueDiff < 42f || aHsv[1] < 0.35f) {
             if (pHsv[0] < 70f || pHsv[0] > 300f) {
                 0xFF7DD3FC.toInt() // Crisp electric sky-blue over warm/crimson/amber covers
             } else {
-                0xFFFDE68A.toInt() // Luminous warm gold-ivory over cool blue/teal/green covers
+                0xFFFCD34D.toInt() // Rich luminous amber-gold over cool blue/teal/green covers
             }
         } else {
             rawAccBoosted
         }
+        val finalHsv = FloatArray(3)
+        Color.colorToHSV(chosenAccent, finalHsv)
+        finalHsv[1] = finalHsv[1].coerceIn(0.68f, 0.94f)
+        finalHsv[2] = finalHsv[2].coerceIn(0.88f, 0.98f)
+        val accentGlow = Color.HSVToColor(finalHsv)
 
         val targetSlot = pool[poolIdx]
         poolIdx = (poolIdx + 1) % pool.size
