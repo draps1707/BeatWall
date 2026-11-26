@@ -281,6 +281,73 @@
                         android:text="Live"
                         android:textSize="11sp" />
                 </LinearLayout>
+
+                <!-- 5-World Quick Preview Selector -->
+                <HorizontalScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/btnWorldToday"
+                            style="@style/Widget.Material3.Button.TonalButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:text="Today"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldDunes"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Dunes"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldSnow"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Snowy Lake"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldForest"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Forest"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldMesa"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Mesa"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldOcean"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Ocean"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                </HorizontalScrollView>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

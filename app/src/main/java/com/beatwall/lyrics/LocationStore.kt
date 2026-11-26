@@ -43,6 +43,17 @@ object LocationStore {
             .getInt(KEY_PREVIEW_MIN, -1)
     }
 
+    fun getPreviewDayOfYear(context: Context): Int {
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("preview_day_of_year", -1)
+    }
+
+    fun setPreviewDayOfYear(context: Context, dayOfYear: Int) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putInt("preview_day_of_year", dayOfYear)
+            .apply()
+    }
+
     fun setPreviewMinute(context: Context, minuteOfDay: Int) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putInt(KEY_PREVIEW_MIN, minuteOfDay)
