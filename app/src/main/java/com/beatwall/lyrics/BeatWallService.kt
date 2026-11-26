@@ -78,7 +78,7 @@ class BeatWallService : WallpaperService() {
         private var cachedDay = 1
         private var cachedMin = 720
         private var cachedLoc = SavedLocation(22.2604, 84.8536, "Rourkela")
-        private var cachedWeather = WeatherState(SkyWeather.CLEAR, 8f, 10f, 50f)
+        private var cachedWeather = WeatherState(SkyWeather.CLEAR, 8f, 10, 50)
 
         private var activeState: ActiveTrackState? = null
         private var prevState: ActiveTrackState? = null
@@ -126,7 +126,6 @@ class BeatWallService : WallpaperService() {
         private var frameScheduled = false
         private var cachedSkySnapshot: SkySnapshot? = null
         private var lastSkyComputeMs = 0L
-                lastEnvCacheMs = 0L
 
         private fun effectiveTimeMillisAndMinute(): Pair<Long, Int> {
             val prevMin = LocationStore.getPreviewMinute(applicationContext)
@@ -400,6 +399,7 @@ class BeatWallService : WallpaperService() {
             this.visible = visible
             if (visible && powerManager.isInteractive) {
                 lastSkyComputeMs = 0L
+                lastEnvCacheMs = 0L
                 mainHandler.post { tracker.refreshActiveSessions() }
                 snapToCurrentPosition()
                 updateLoopState()
