@@ -74,6 +74,11 @@ class BeatWallService : WallpaperService() {
 
         private var isCharging = false
         private var isLowBattery = false
+        private var lastEnvCacheMs = 0L
+        private var cachedDay = 1
+        private var cachedMin = 720
+        private var cachedLoc = SavedLocation(22.2604, 84.8536, "Rourkela")
+        private var cachedWeather = WeatherState(SkyWeather.CLEAR, 8f, 10f, 50f)
 
         private var activeState: ActiveTrackState? = null
         private var prevState: ActiveTrackState? = null
@@ -121,6 +126,7 @@ class BeatWallService : WallpaperService() {
         private var frameScheduled = false
         private var cachedSkySnapshot: SkySnapshot? = null
         private var lastSkyComputeMs = 0L
+                lastEnvCacheMs = 0L
 
         private fun effectiveTimeMillisAndMinute(): Pair<Long, Int> {
             val prevMin = LocationStore.getPreviewMinute(applicationContext)
@@ -561,21 +567,20 @@ class BeatWallService : WallpaperService() {
             return true
         }
 
-        private fun targetFrameRate(): Float {
-            if (!needsAnimation()) return 0f
+        private fun isHighRateNeeded(): Boolean {
             val targetLock = if (keyguardManager.isKeyguardLocked) 1f else 0f
-            return if (
-                abs(targetLock - lockBlend) > 0.005f || abs(lockVel) > 0.01f ||
+            return abs(targetLock - lockBlend) > 0.005f || abs(lockVel) > 0.01f ||
                 isCrossfading ||
                 abs(targetLyricsAlpha - lyricsAlpha) > 0.005f || abs(lyricsAlphaVel) > 0.01f ||
                 abs(targetEqAmp - eqAmp) > 0.005f || abs(eqVel) > 0.01f ||
                 proceduralAnimator.isCoasting() || studioOmega > 0.002 ||
                 activeState?.isPlaying == true
-            ) {
-                120f
-            } else {
-                30f
-            }
+        }
+
+        private fun targetFrameRate(): Float {
+            if (!needsAnimation()) return 0f
+            // Keep surface hint locked at 120f while active (doFrame throttles Circadian to 30fps without LTPO renegotiation)
+            return 120f
         }
 
         private fun scheduleNextFrame() {
@@ -602,7 +607,6 @@ class BeatWallService : WallpaperService() {
                 frameScheduled = false
                 choreographer.removeFrameCallback(this)
             }
-            setSurfaceFrameRate(0f)
         }
 
         private fun setSurfaceFrameRate(hz: Float) {
@@ -623,7 +627,6 @@ class BeatWallService : WallpaperService() {
         override fun doFrame(frameTimeNanos: Long) {
             frameScheduled = false
             if (!visible || !surfaceReady || !powerManager.isInteractive) {
-                setSurfaceFrameRate(0f)
                 return
             }
 
@@ -723,9 +726,9 @@ class BeatWallService : WallpaperService() {
                     }
                 }
 
-                val rate = targetFrameRate()
-                setSurfaceFrameRate(rate)
-                if (rate > 30f || (frameTimeNanos - lastDrawNanos) >= 31_000_000L) {
+                val highRate = isHighRateNeeded()
+                setSurfaceFrameRate(120f)
+                if (highRate || (frameTimeNanos - lastDrawNanos) >= 31_000_000L) {
                     lastDrawNanos = frameTimeNanos
                     drawFrame(frameTimeNanos)
                 }
@@ -780,10 +783,17 @@ class BeatWallService : WallpaperService() {
 
             if (state == null) {
                 val sky = getSkySnapshot(isLock)
-                val (_, effMin) = effectiveTimeMillisAndMinute()
-                val loc = LocationStore.load(applicationContext)
-                val weatherState = WeatherClient.getCachedOrRefresh(applicationContext, loc.lat, loc.lon)
-                val circ = artProcessor.getCircadianTheme(currentDayOfMonth(), effMin, sky.sunAltDeg, weatherState.humidityPct)
+                val nowMs = SystemClock.elapsedRealtime()
+                if (nowMs - lastEnvCacheMs >= 15_000L || lastEnvCacheMs == 0L) {
+                    lastEnvCacheMs = nowMs
+                    cachedDay = currentDayOfMonth()
+                    val (_, effMin) = effectiveTimeMillisAndMinute()
+                    cachedMin = effMin
+                    cachedLoc = LocationStore.load(applicationContext)
+                    cachedWeather = WeatherClient.getCachedOrRefresh(applicationContext, cachedLoc.lat, cachedLoc.lon)
+                }
+                val weatherState = cachedWeather
+                val circ = artProcessor.getCircadianTheme(cachedDay, cachedMin, sky.sunAltDeg, weatherState.humidityPct)
                 bmpPaint.alpha = masterAlpha
                 backdropRect.set(0f, 0f, width.toFloat(), height.toFloat())
                 canvas.drawBitmap(circ.backdrop, null, backdropRect, bmpPaint)
@@ -1760,7 +1770,12 @@ class BeatWallService : WallpaperService() {
                 val alignBias = -relY.coerceIn(-1f, 1f)
                 val alignShift = alignBias * ((layout.width - maxLw * scale) * 0.36f).coerceAtLeast(0f)
                 val diagShift = -relY * (width * 0.21f) * (1f - focusStrength)
-                val dx = alignShift + diagShift
+                val rawDx = alignShift + diagShift
+                val halfScaledW = (maxLw * scale) * 0.5f
+                val layoutCenterX = centerX + layout.width * 0.5f
+                val minDx = (width * 0.05f + halfScaledW) - layoutCenterX
+                val maxDx = (width * 0.95f - halfScaledW) - layoutCenterX
+                val dx = if (minDx <= maxDx) rawDx.coerceIn(minDx, maxDx) else 0f
 
                 canvas.save()
                 canvas.translate(centerX + dx, yPos)
@@ -1794,10 +1809,10 @@ class BeatWallService : WallpaperService() {
                     val deepTint = deepRgb or (lineAlpha shl 24)
                     val faintTint = faintRgb or (((lineAlpha * 0.40f).toInt().coerceIn(0, 255)) shl 24)
 
-                    if (totalSweepFrac <= 0.005f) {
+                    if (totalSweepFrac <= 0.005f || lineAlpha < 252) {
                         layout.paint.shader = null
                         layout.paint.style = Paint.Style.FILL
-                        layout.paint.color = faintTint
+                        layout.paint.color = if (i < approxIdx) deepTint else faintTint
                         layout.draw(canvas)
                     } else if (totalSweepFrac >= 0.995f) {
                         layout.paint.shader = null

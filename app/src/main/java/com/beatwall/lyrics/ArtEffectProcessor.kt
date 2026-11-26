@@ -344,7 +344,13 @@ class ArtEffectProcessor {
             finalHsv[0] = 210f
         }
         finalHsv[2] = finalHsv[2].coerceIn(0.88f, 0.98f)
-        val accentGlow = Color.HSVToColor(finalHsv)
+        var accentGlow = Color.HSVToColor(finalHsv)
+        // Perceptual luminance floor (keeps pure red/deep blue luminous on dark backdrops without turning white)
+        var guard = 0
+        while (ColorUtils.calculateLuminance(accentGlow) < 0.34 && guard < 6) {
+            accentGlow = ColorUtils.blendARGB(accentGlow, Color.WHITE, 0.14f)
+            guard++
+        }
 
         val targetSlot = pool[poolIdx]
         poolIdx = (poolIdx + 1) % pool.size
