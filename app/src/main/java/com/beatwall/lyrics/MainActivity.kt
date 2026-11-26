@@ -119,7 +119,8 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
             R.id.btnWorldForest to (3 to "Misty Pine Forest preview"),
             R.id.btnWorldMesa to (4 to "Emerald Savanna preview"),
             R.id.btnWorldOcean to (5 to "Coastal Ocean preview"),
-            R.id.btnWorldWoodland to (6 to "Sunlit Woodland preview")
+            R.id.btnWorldWoodland to (6 to "Sunlit Woodland preview"),
+            R.id.btnWorldReeds to (7 to "Coastal Reeds preview")
         )
         for ((btnId, pair) in worldMap) {
             findViewById<Button>(btnId).setOnClickListener {
