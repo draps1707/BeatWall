@@ -24,7 +24,8 @@ enum class WorldBiome(val title: String) {
     GOLDEN_SAVANNA("Emerald Savanna & Meadow"),
     COASTAL_OCEAN("Coastal Ocean"),
     SUNLIT_WOODLAND("Sunlit Woodland"),
-    COASTAL_REEDS("Coastal Reeds & Wildflowers")
+    COASTAL_REEDS("Coastal Reeds & Wildflowers"),
+    CRYSTAL_COVE("Crystal Boulder Cove")
 }
 
 /**
@@ -136,6 +137,11 @@ class LandscapeEngine {
             WorldBiome.COASTAL_REEDS -> {
                 val onLeft = (dayOfYear % 2 == 1)
                 buildHeadlandPath(farPath, wf, baseH, h * 0.045f, onLeft, dayOfYear)
+            }
+            WorldBiome.CRYSTAL_COVE -> {
+                buildDunePath(farPath, wf, hf, baseH - h * 0.01f, h * 0.022f, 1.3f, p1)
+                buildCoveBoulders(midPath, lakeReflectPath, wf, baseH, h * 0.060f, dayOfYear, salt = 263, count = 6, reflect = true)
+                buildCoveBoulders(forePath, null, wf, h * 0.85f, h * 0.055f, dayOfYear, salt = 277, count = 3, reflect = false)
             }
         }
     }
@@ -301,6 +307,26 @@ class LandscapeEngine {
             path.addOval(rect, Path.Direction.CW)
             rect.set(tx + canopyW * 0.02f, ty - trunkH - canopyH * 0.72f, tx + canopyW * 0.54f, ty - trunkH + canopyH * 0.22f)
             path.addOval(rect, Path.Direction.CW)
+        }
+    }
+
+
+    private fun buildCoveBoulders(
+        path: Path, reflectPath: Path?, w: Float, yBase: Float, maxR: Float,
+        day: Int, salt: Int, count: Int, reflect: Boolean
+    ) {
+        for (i in 0 until count) {
+            val fx = (i + 0.25f + 0.50f * seedRand(day + i, salt + 3)) / count
+            val cx = fx * w
+            val rx = w * (0.065f + 0.055f * seedRand(day + i, salt + 7))
+            val ry = maxR * (0.55f + 0.45f * seedRand(day + i, salt + 11))
+            val cy = yBase + (seedRand(day + i, salt + 13) - 0.5f) * (maxR * 0.35f)
+            rect.set(cx - rx, cy - ry, cx + rx, cy + ry * 0.45f)
+            path.addOval(rect, Path.Direction.CW)
+            if (reflect && reflectPath != null) {
+                rect.set(cx - rx * 0.95f, cy + ry * 0.10f, cx + rx * 0.95f, cy + ry * 1.15f)
+                reflectPath.addOval(rect, Path.Direction.CW)
+            }
         }
     }
 
@@ -507,6 +533,11 @@ class LandscapeEngine {
             )
             WorldBiome.COASTAL_REEDS -> drawCoastalReeds(
                 canvas, width, height, density, dayOfYear, horizonY, midShiftY,
+                sky, circ, weather, lightColor, lightStrength, shadowBase,
+                if (sky.sunAltDeg > -4f) sunX else moonX, isDay, windDir, steadyWind, timeSec, masterAlpha
+            )
+            WorldBiome.CRYSTAL_COVE -> drawCrystalCove(
+                canvas, width, height, density, dayOfYear, horizonY, midShiftY, foreShiftY,
                 sky, circ, weather, lightColor, lightStrength, shadowBase,
                 if (sky.sunAltDeg > -4f) sunX else moonX, isDay, windDir, steadyWind, timeSec, masterAlpha
             )
@@ -962,6 +993,92 @@ class LandscapeEngine {
         canvas.drawPath(floraPath, fillPaint)
     }
 
+
+    private fun drawCoastalOcean(
+        canvas: Canvas, w: Int, h: Int, density: Float, horizonY: Float, midShiftY: Float,
+        sky: SkySnapshot, weather: WeatherState,
+        lightColor: Int, shadowBase: Int, orbX: Float, isDay: Boolean,
+        windDir: Float, steadyWind: Float, timeSec: Double, masterAlpha: Int
+    ) {
+        fillPaint.shader = LinearGradient(
+            0f, horizonY - h * 0.07f, 0f, horizonY + 4f,
+            intArrayOf(ColorUtils.blendARGB(0xFF1E293B.toInt(), lightColor, 0.25f), shadowBase), null, Shader.TileMode.CLAMP
+        )
+        fillPaint.alpha = (masterAlpha * 0.72f).toInt()
+        canvas.save(); canvas.translate(0f, midShiftY * 0.5f); canvas.drawPath(farPath, fillPaint); canvas.restore()
+        fillPaint.shader = null
+
+        val shoreY = h * (0.85f + 0.025f * ((horizonY - h * 0.66f) / (h * 0.05f)) - sky.tideFrac * 0.018f)
+        drawWaterShimmer(canvas, w, h, density, horizonY, shoreY, sky, weather, orbX, isDay, steadyWind, timeSec, masterAlpha)
+
+        val isBiolum = !isDay && sky.moonIllumination < 0.08f && weather.sky == SkyWeather.CLEAR
+        val swellRgb = if (isDay) 0x00E0F2FE else (if (isBiolum) 0x002DD4BF else 0x0094A3B8)
+        val foamRgb = if (isDay) 0x00F8FAFC else (if (isBiolum) 0x005EEAD4 else 0x00CBD5E1)
+        val surfEnergy = (0.76f + (steadyWind / 36f) + (sky.tideFrac * 0.15f)).coerceIn(0.72f, 1.45f)
+        val waveSpeed = 0.024 + (steadyWind / 800.0).coerceIn(0.0, 0.015)
+        val seaSpan = (shoreY - horizonY).coerceAtLeast(1f)
+
+        val tideBreath = 0.85f + 0.15f * sin(timeSec * 0.45).toFloat()
+        val tideAlpha = (masterAlpha * (if (isDay) 0.14f else 0.09f) * tideBreath).toInt().coerceIn(0, 255)
+        drawSoftMist(canvas, w * 0.5f, shoreY + h * 0.004f, w * 0.78f, h * 0.011f, foamRgb or (tideAlpha shl 24))
+
+        for (wIdx in 0 until 3) {
+            val waveProg = (((timeSec * waveSpeed) + wIdx / 3.0) % 1.0).toFloat()
+            val persp = waveProg * sqrt(waveProg)
+            val wy = horizonY + seaSpan * (0.34f + persp * 0.66f)
+            val env = sin(waveProg * PI).toFloat()
+            val driftX = sin(timeSec * 0.16 * 1.618 + wIdx * 2.1).toFloat() * (w * 0.05f)
+            val cx = w * (0.44f + (wIdx % 2) * 0.12f) + driftX
+            val halfW = w * (0.30f + 0.12f * waveProg)
+            val bandH = h * (0.006f + 0.008f * waveProg)
+            val glowAlpha = (masterAlpha * env * (if (isDay) 0.17f else 0.10f) * surfEnergy).toInt().coerceIn(0, 255)
+            if (glowAlpha > 2) {
+                drawSoftMist(canvas, cx, wy, halfW, bandH, swellRgb or (glowAlpha shl 24))
+            }
+            if (waveProg > 0.66f) {
+                val washFrac = ((waveProg - 0.66f) / 0.34f).coerceIn(0f, 1f)
+                val washEnv = sin(washFrac * PI).toFloat()
+                val washY = shoreY + h * (0.009f * washEnv)
+                val washAlpha = (masterAlpha * washEnv * (if (isDay) 0.22f else 0.12f) * surfEnergy).toInt().coerceIn(0, 255)
+                if (washAlpha > 2) {
+                    drawSoftMist(canvas, cx, washY, halfW * 1.12f, h * (0.008f + 0.008f * washEnv), foamRgb or (washAlpha shl 24))
+                }
+            }
+        }
+
+        val boatSpeed = (0.0018 + (steadyWind / 60.0).coerceIn(0.0, 1.0) * 0.0010) * windDir
+        val boatX = ((((0.20f + (timeSec * boatSpeed).toFloat()) % 1.16f) + 1.16f) % 1.16f - 0.08f) * w
+        val boatBob = sin(timeSec * 1.1).toFloat() * (density * 1.4f)
+        val boatY = horizonY + h * 0.013f + boatBob
+        fillPaint.color = if (isDay) 0xFF0F172A.toInt() else 0xFF020617.toInt()
+        fillPaint.alpha = (masterAlpha * 0.60f).toInt()
+        val bw = w * 0.025f
+        val bh = w * 0.021f
+        rect.set(boatX - bw * 0.5f, boatY, boatX + bw * 0.5f, boatY + density * 2.2f)
+        canvas.drawRoundRect(rect, density, density, fillPaint)
+        birdPath.reset()
+        birdPath.moveTo(boatX - bw * 0.05f, boatY)
+        birdPath.lineTo(boatX - bw * 0.05f, boatY - bh)
+        birdPath.lineTo(boatX + bw * 0.42f * windDir, boatY - density * 1.5f)
+        birdPath.close()
+        canvas.drawPath(birdPath, fillPaint)
+
+        if (sky.sunAltDeg > -2f) {
+            val dayFactor = ((sky.sunAltDeg + 2f) / 6f).coerceIn(0f, 1f)
+            strokePaint.strokeWidth = density * 1.15f
+            strokePaint.color = 0xFF1E293B.toInt()
+            for (g in 0 until 4) {
+                val gx = ((((0.22f + g * 0.055f + (timeSec * 0.0085 * windDir).toFloat()) % 1.28f) + 1.28f) % 1.28f - 0.14f) * w
+                val gy = h * (0.29f + (g % 2) * 0.018f + (g / 2) * 0.024f) - sin(timeSec * 0.8 + g * 0.9).toFloat() * (h * 0.007f)
+                val span = w * (0.014f - g * 0.0018f)
+                val flap = sin(timeSec * 1.8 + g * 1.3).toFloat() * (span * 0.34f)
+                strokePaint.alpha = (masterAlpha * (0.42f - g * 0.05f) * dayFactor).toInt().coerceIn(0, 255)
+                canvas.drawLine(gx - span, gy - flap, gx, gy + span * 0.22f, strokePaint)
+                canvas.drawLine(gx, gy + span * 0.22f, gx + span, gy - flap, strokePaint)
+            }
+        }
+    }
+
     private fun drawCoastalReeds(
         canvas: Canvas, w: Int, h: Int, density: Float, dayOfYear: Int,
         horizonY: Float, midShiftY: Float,
@@ -1067,6 +1184,111 @@ class LandscapeEngine {
                 val col = if (bf == 0) ColorUtils.blendARGB(0xFFF59E0B.toInt(), sky.sunColor, 0.30f) else 0xFFBAE6FD.toInt()
                 drawButterfly(canvas, bx, by, density * (10.5f + bf * 1.5f), col, (masterAlpha * 0.88f * bfVis).toInt(), timeSec, bf * 1.5)
             }
+        }
+    }
+
+
+    private fun drawCrystalCove(
+        canvas: Canvas, w: Int, h: Int, density: Float, dayOfYear: Int,
+        horizonY: Float, midShiftY: Float, foreShiftY: Float,
+        sky: SkySnapshot, circ: CircadianTheme, weather: WeatherState,
+        lightColor: Int, lightStrength: Float, shadowBase: Int,
+        orbX: Float, isDay: Boolean, windDir: Float, steadyWind: Float,
+        timeSec: Double, masterAlpha: Int
+    ) {
+        // 1. Distant low mountain ridge behind the cove
+        fillPaint.shader = LinearGradient(
+            0f, horizonY - h * 0.04f, 0f, horizonY + 4f,
+            intArrayOf(ColorUtils.blendARGB(0xFF334155.toInt(), circ.horizonColor, 0.45f), shadowBase),
+            null, Shader.TileMode.CLAMP
+        )
+        fillPaint.alpha = (masterAlpha * 0.65f).toInt()
+        canvas.save(); canvas.translate(0f, midShiftY * 0.4f); canvas.drawPath(farPath, fillPaint); canvas.restore()
+
+        // 2. Crystal-clear teal-turquoise shallows water gradient
+        val topWater = if (isDay) ColorUtils.blendARGB(circ.horizonColor, 0xFF0E7490.toInt(), 0.58f) else 0xFF0B192C.toInt()
+        val botWater = if (isDay) ColorUtils.blendARGB(0xFF065F46.toInt(), 0xFF0E7490.toInt(), 0.55f) else 0xFF020612.toInt()
+        fillPaint.shader = LinearGradient(0f, horizonY, 0f, h.toFloat(), intArrayOf(topWater, botWater), null, Shader.TileMode.CLAMP)
+        fillPaint.alpha = masterAlpha
+        canvas.drawRect(0f, horizonY, w.toFloat(), h.toFloat(), fillPaint)
+        fillPaint.shader = null
+
+        // 3. Soft inverted mirror reflections of shoreline boulders + sun/moon water shimmer
+        fillPaint.color = ColorUtils.blendARGB(0xFF1E293B.toInt(), topWater, 0.45f)
+        fillPaint.alpha = (masterAlpha * 0.34f).toInt()
+        canvas.save(); canvas.translate(0f, midShiftY); canvas.drawPath(lakeReflectPath, fillPaint); canvas.restore()
+
+        val shoreY = h * 0.94f
+        drawWaterShimmer(canvas, w, h, density, horizonY, shoreY, sky, weather, orbX, isDay, steadyWind, timeSec, masterAlpha)
+
+        // 4. Underwater caustic light ribbons on the sandy cove floor (wind-paced)
+        val causticRgb = if (isDay) (ColorUtils.blendARGB(0xFF5EEAD4.toInt(), lightColor, 0.35f) and 0x00FFFFFF) else (sky.moonColor and 0x00FFFFFF)
+        val causticAlpha = (masterAlpha * (if (isDay) 0.14f else 0.06f) * lightStrength).toInt().coerceIn(0, 120)
+        if (causticAlpha > 2) {
+            strokePaint.color = causticRgb or (causticAlpha shl 24)
+            strokePaint.strokeWidth = density * 2.2f
+            val cSpeed = 0.015 + (steadyWind / 450.0).coerceIn(0.0, 0.025)
+            for (c in 0 until 5) {
+                val prog = (((timeSec * cSpeed * windDir) + c * 0.21) % 1.0 + 1.0) % 1.0
+                val cx = (prog.toFloat() * 1.2f - 0.1f) * w
+                val cy = h * (0.76f + (c % 3) * 0.065f)
+                val wave = sin(timeSec * 0.9 + c * 1.4).toFloat() * (h * 0.014f)
+                floraPath.reset()
+                floraPath.moveTo(cx - w * 0.14f, cy - wave)
+                floraPath.quadTo(cx, cy + wave, cx + w * 0.14f, cy - wave * 0.6f)
+                canvas.drawPath(floraPath, strokePaint)
+            }
+        }
+
+        // 5. 5 sleek fish swimming lazily through the clear cove shallows
+        val fishCol = if (isDay) ColorUtils.blendARGB(0xFF0F172A.toInt(), botWater, 0.42f) else 0xFF020617.toInt()
+        fillPaint.color = fishCol
+        fillPaint.alpha = (masterAlpha * (if (isDay) 0.65f else 0.35f)).toInt()
+        for (f in 0 until 5) {
+            val dir = if (f % 2 == 0) 1f else -1f
+            val speed = 0.016 + (f % 3) * 0.004
+            val fxFrac = ((((0.15 + f * 0.19) + timeSec * speed * dir) % 1.20) + 1.20) % 1.20 - 0.10
+            val fx = fxFrac.toFloat() * w
+            val fy = h * (0.75f + (f % 4) * 0.045f) + sin(timeSec * 0.8 + f * 1.7).toFloat() * (h * 0.012f)
+            val len = density * (11f + (f % 3) * 3f)
+            val tailWag = sin(timeSec * 4.5 + f * 1.3).toFloat() * (len * 0.25f)
+
+            floraPath.reset()
+            floraPath.moveTo(fx + len * 0.55f * dir, fy)
+            floraPath.quadTo(fx, fy - len * 0.28f, fx - len * 0.45f * dir, fy + tailWag * 0.3f)
+            floraPath.lineTo(fx - len * 0.78f * dir, fy - len * 0.26f + tailWag)
+            floraPath.lineTo(fx - len * 0.78f * dir, fy + len * 0.26f + tailWag)
+            floraPath.lineTo(fx - len * 0.45f * dir, fy + tailWag * 0.3f)
+            floraPath.quadTo(fx, fy + len * 0.28f, fx + len * 0.55f * dir, fy)
+            floraPath.close()
+            canvas.drawPath(floraPath, fillPaint)
+        }
+
+        // 6. Sun-warmed granite boulders along shoreline (midPath) & shallow foreground (forePath)
+        val rockLit = ColorUtils.blendARGB(0xFFD6D3D1.toInt(), lightColor, 0.48f)
+        val rockDark = if (isDay) 0xFF334155.toInt() else 0xFF090D16.toInt()
+        val xTilt = ((orbX / w.toFloat()) - 0.5f) * (w * 0.28f)
+        fillPaint.shader = LinearGradient(
+            w * 0.5f + xTilt, horizonY - h * 0.06f,
+            w * 0.5f - xTilt, horizonY + h * 0.04f,
+            intArrayOf(rockLit, rockDark), null, Shader.TileMode.CLAMP
+        )
+        fillPaint.alpha = masterAlpha
+        canvas.save(); canvas.translate(0f, midShiftY); canvas.drawPath(midPath, fillPaint); canvas.restore()
+
+        fillPaint.shader = LinearGradient(
+            w * 0.5f + xTilt, h * 0.78f,
+            w * 0.5f - xTilt, h * 0.92f,
+            intArrayOf(ColorUtils.blendARGB(rockLit, botWater, 0.22f), rockDark),
+            null, Shader.TileMode.CLAMP
+        )
+        fillPaint.alpha = (masterAlpha * 0.90f).toInt()
+        canvas.save(); canvas.translate(0f, foreShiftY * 0.5f); canvas.drawPath(forePath, fillPaint); canvas.restore()
+        fillPaint.shader = null
+
+        // 7. Daytime birds gliding cleanly in open sky
+        if (isDay) {
+            drawSwallows(canvas, w, h, density, windDir, timeSec, masterAlpha)
         }
     }
 
