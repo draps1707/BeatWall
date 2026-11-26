@@ -1086,7 +1086,7 @@ class BeatWallService : WallpaperService() {
                 var nearSunBeam = 0f
 
                 for (c in 0 until 3) {
-                    val speed = (0.0062f + c * 0.0016f) * windFactor * windDir
+                    val speed = (0.0028f + c * 0.0007f) * windFactor * windDir
                     val cx = ((((0.18f + c * 0.36f + (timeSec * speed).toFloat()) % 1.48f) + 1.48f) % 1.48f - 0.24f) * width
                     val cy = height * (0.24f + c * 0.10f)
                     val layerBoost = if (c == 0) (0.85f + 0.35f * highMix) else (0.85f + 0.35f * lowMix)
