@@ -227,7 +227,7 @@ class LrcLibClient(context: Context) {
             requestMethod = "GET"
             connectTimeout = 2000
             readTimeout = 2000
-            setRequestProperty("User-Agent", "BeatWall/6.0.2 (https://github.com/beatwall)")
+            setRequestProperty("User-Agent", "BeatWall/6.0.3 (https://github.com/beatwall)")
         }
         return try {
             if (conn.responseCode == 200) {

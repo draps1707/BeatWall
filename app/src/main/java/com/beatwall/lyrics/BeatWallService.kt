@@ -1737,9 +1737,16 @@ class BeatWallService : WallpaperService() {
             val start = (approxIdx - 3).coerceAtLeast(0)
             val end = (approxIdx + 3).coerceAtMost(maxIdx)
             val clipH = (clipBottom - clipTop).coerceAtLeast(1f)
-            val mistZone = clipH * 0.14f
+            val mistZone = clipH * 0.11f
             val posMs = state.currentPositionMs()
             val isPlaying = state.isPlaying && !isLowBattery
+
+            // Stretch 7-step vertical spread on Home Screen so -3..+3 reach bottom-left & top-right Blue Circles,
+            // while blending smoothly back to compact spacing on Lockscreen via lockBlend.
+            val safeStep = lineStepPx.coerceAtLeast(1f)
+            val homeStep = (clipH / 6.8f).coerceAtLeast(safeStep)
+            val effectiveStep = homeStep + (safeStep - homeStep) * lockBlend
+            val spreadRatio = (effectiveStep / safeStep).coerceIn(1f, 1.85f)
 
             // FAINT (white-mixed pastel of bestColor) -> DEEP (pure saturated bestColor), ZERO pure white snap
             val deepRgb = accentColor and 0x00FFFFFF
@@ -1747,7 +1754,8 @@ class BeatWallService : WallpaperService() {
 
             for (i in start..end) {
                 val layout = layouts[i]
-                val lineOffset = yCenters[i] - scrollY
+                val rawOffset = yCenters[i] - scrollY
+                val lineOffset = rawOffset * spreadRatio
                 val yPos = centerY + lineOffset - (layout.height / 2f)
 
                 val topFade = smoothstep((yPos - clipTop) / mistZone)
@@ -1756,9 +1764,9 @@ class BeatWallService : WallpaperService() {
                 if (mistFactor <= 0.005f) continue
 
                 // 7-step pyramid: Step 0 (Centre) biggest & sharpest -> +/-1, +/-2, +/-3 progressively smaller & fainter
-                val stepDist = abs(lineOffset) / lineStepPx.coerceAtLeast(1f)
+                val stepDist = abs(rawOffset) / safeStep
                 val focusStrength = 1f - smoothstep((stepDist / 0.65f).coerceIn(0f, 1f))
-                val distFade = (1f / (1f + 1.10f * stepDist * stepDist)).coerceIn(0.08f, 1.0f)
+                val distFade = (1f / (1f + 0.90f * stepDist * stepDist)).coerceIn(0.10f, 1.0f)
                 val pausedScale = if (isPlaying) 1.0f else 0.72f
                 val lineAlpha = (masterAlpha * distFade * mistFactor * pausedScale).toInt().coerceIn(0, 255)
                 if (lineAlpha <= 2) continue
