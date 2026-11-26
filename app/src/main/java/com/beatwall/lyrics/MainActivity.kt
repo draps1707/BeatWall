@@ -117,7 +117,7 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
             R.id.btnWorldDunes to (1 to "Sand Dunes preview"),
             R.id.btnWorldSnow to (2 to "Snowy Peaks & Mirror Lake preview"),
             R.id.btnWorldForest to (3 to "Misty Pine Forest preview"),
-            R.id.btnWorldMesa to (4 to "Red Rock Mesa preview"),
+            R.id.btnWorldMesa to (4 to "Golden Savanna preview"),
             R.id.btnWorldOcean to (5 to "Coastal Ocean preview")
         )
         for ((btnId, pair) in worldMap) {

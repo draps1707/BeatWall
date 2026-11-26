@@ -335,7 +335,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="34dp"
                             android:layout_marginStart="6dp"
-                            android:text="Mesa"
+                            android:text="Savanna"
                             android:textSize="11sp" />
 
                         <Button
