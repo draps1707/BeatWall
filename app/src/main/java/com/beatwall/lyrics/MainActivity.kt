@@ -114,14 +114,18 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
 
         val worldMap = mapOf(
             R.id.btnWorldToday to (-1 to "Today's live world"),
-            R.id.btnWorldDunes to (1 to "Sand Dunes preview"),
-            R.id.btnWorldSnow to (2 to "Snowy Peaks & Mirror Lake preview"),
-            R.id.btnWorldForest to (3 to "Misty Pine Forest preview"),
+            R.id.btnWorldForest to (1 to "Firewatch Lookout preview"),
+            R.id.btnWorldDunes to (2 to "Sand Dunes preview"),
+            R.id.btnWorldSnow to (3 to "Snowy Peaks & Lake preview"),
             R.id.btnWorldMesa to (4 to "Emerald Savanna preview"),
             R.id.btnWorldOcean to (5 to "Coastal Ocean preview"),
             R.id.btnWorldWoodland to (6 to "Sunlit Woodland preview"),
             R.id.btnWorldReeds to (7 to "Coastal Reeds preview"),
-            R.id.btnWorldCove to (8 to "Crystal Cove preview")
+            R.id.btnWorldCove to (8 to "Crystal Cove preview"),
+            R.id.btnWorldTorii to (9 to "Kyoto Torii Lake preview"),
+            R.id.btnWorldLighthouse to (10 to "Lighthouse Cliff preview"),
+            R.id.btnWorldFjord to (11 to "Nordic Aurora Fjord preview"),
+            R.id.btnWorldStag to (12 to "Valley Lake & Stag preview")
         )
         for ((btnId, pair) in worldMap) {
             findViewById<Button>(btnId).setOnClickListener {

@@ -1030,11 +1030,9 @@ class BeatWallService : WallpaperService() {
                 val sunGlowAlpha = (masterAlpha * 0.48f * horizonFade * pulse).toInt().coerceIn(0, 255)
                 drawSoftOval(sunX, sunY, glowR, glowR, (coronaCol and 0x00FFFFFF) or (sunGlowAlpha shl 24))
 
-                if (landscapeEngine.biomeForDay(cachedDayOfYear) != WorldBiome.SUNLIT_WOODLAND) {
-                    orbPaint.color = if (sky.isSolarEclipse) 0xFF05060A.toInt() else sky.sunColor
-                    orbPaint.alpha = (masterAlpha * 0.94f * horizonFade).toInt()
-                    canvas.drawCircle(sunX, sunY, width * 0.021f, orbPaint)
-                }
+                orbPaint.color = if (sky.isSolarEclipse) 0xFF05060A.toInt() else sky.sunColor
+                orbPaint.alpha = (masterAlpha * 0.94f * horizonFade).toInt()
+                canvas.drawCircle(sunX, sunY, width * 0.021f, orbPaint)
             }
 
             // 2B. Real-Phase Moon with Air-Mass Orange->Silver Color, Bright-Limb Tilt & Daytime Blending
@@ -1070,11 +1068,9 @@ class BeatWallService : WallpaperService() {
                 }
                 moonPath.close()
 
-                if (landscapeEngine.biomeForDay(cachedDayOfYear) != WorldBiome.SUNLIT_WOODLAND) {
-                    orbPaint.color = sky.moonColor
-                    orbPaint.alpha = (masterAlpha * dayVisibility * moonHorizonFade).toInt()
-                    canvas.drawPath(moonPath, orbPaint)
-                }
+                orbPaint.color = sky.moonColor
+                orbPaint.alpha = (masterAlpha * dayVisibility * moonHorizonFade).toInt()
+                canvas.drawPath(moonPath, orbPaint)
                 canvas.restore()
             }
 
@@ -1163,7 +1159,6 @@ class BeatWallService : WallpaperService() {
 
             // 4. 366-Day Living Landscape Engine (5 Worlds, Alpenglow, Biology, Lock<->Home 3D Parallax)
             landscapeEngine.drawForeground(
-                context = this@BeatWallService,
                 canvas = canvas,
                 width = width,
                 height = height,

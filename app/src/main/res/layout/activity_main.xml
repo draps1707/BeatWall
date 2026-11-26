@@ -282,7 +282,7 @@
                         android:textSize="11sp" />
                 </LinearLayout>
 
-                <!-- 5-World Quick Preview Selector -->
+                <!-- 12-World Firewatch Quick Preview Selector -->
                 <HorizontalScrollView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -303,6 +303,15 @@
                             android:textSize="11sp" />
 
                         <Button
+                            android:id="@+id/btnWorldForest"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Firewatch"
+                            android:textSize="11sp" />
+
+                        <Button
                             android:id="@+id/btnWorldDunes"
                             style="@style/Widget.Material3.Button.OutlinedButton"
                             android:layout_width="wrap_content"
@@ -318,15 +327,6 @@
                             android:layout_height="34dp"
                             android:layout_marginStart="6dp"
                             android:text="Snowy Lake"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldForest"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Forest"
                             android:textSize="11sp" />
 
                         <Button
@@ -372,6 +372,42 @@
                             android:layout_height="34dp"
                             android:layout_marginStart="6dp"
                             android:text="Cove"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldTorii"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Torii Lake"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldLighthouse"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Lighthouse"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldFjord"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Aurora Fjord"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldStag"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Valley Stag"
                             android:textSize="11sp" />
                     </LinearLayout>
                 </HorizontalScrollView>
