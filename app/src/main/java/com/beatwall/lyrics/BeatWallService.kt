@@ -1168,7 +1168,9 @@ class BeatWallService : WallpaperService() {
                 circ = circ,
                 weather = weatherState,
                 sunX = sunX,
+                sunY = sunY,
                 moonX = moonX,
+                moonY = moonY,
                 lockBlend = lockBlend,
                 timeSec = timeSec,
                 masterAlpha = masterAlpha
