@@ -125,7 +125,15 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
             R.id.btnWorldTorii to (9 to "Kyoto Torii Lake preview"),
             R.id.btnWorldLighthouse to (10 to "Lighthouse Cliff preview"),
             R.id.btnWorldFjord to (11 to "Nordic Aurora Fjord preview"),
-            R.id.btnWorldStag to (12 to "Valley Lake & Stag preview")
+            R.id.btnWorldStag to (12 to "Valley Lake & Stag preview"),
+            R.id.btnWorldCappadocia to (13 to "Cappadocia Balloons preview"),
+            R.id.btnWorldOdisha to (14 to "Odisha Banyan Ghat preview"),
+            R.id.btnWorldHimalaya to (15 to "Himalayan Monastery preview"),
+            R.id.btnWorldViaduct to (16 to "Alpine Viaduct preview"),
+            R.id.btnWorldWindmill to (17 to "Canyon & Windmill preview"),
+            R.id.btnWorldBamboo to (18 to "Misty Bamboo preview"),
+            R.id.btnWorldVolcano to (19 to "Volcanic Caldera preview"),
+            R.id.btnWorldHighland to (20 to "Highland Loch preview")
         )
         for ((btnId, pair) in worldMap) {
             findViewById<Button>(btnId).setOnClickListener {

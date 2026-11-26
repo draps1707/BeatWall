@@ -282,7 +282,7 @@
                         android:textSize="11sp" />
                 </LinearLayout>
 
-                <!-- 12-World Firewatch Quick Preview Selector -->
+                <!-- 20-World Firewatch Quick Preview Selector -->
                 <HorizontalScrollView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -408,6 +408,78 @@
                             android:layout_height="34dp"
                             android:layout_marginStart="6dp"
                             android:text="Valley Stag"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldCappadocia"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Cappadocia"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldOdisha"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Odisha Ghat"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldHimalaya"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Himalaya"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldViaduct"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Viaduct"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldWindmill"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Windmill"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldBamboo"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Bamboo"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldVolcano"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Volcano"
+                            android:textSize="11sp" />
+
+                        <Button
+                            android:id="@+id/btnWorldHighland"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:text="Highland"
                             android:textSize="11sp" />
                     </LinearLayout>
                 </HorizontalScrollView>
