@@ -6,6 +6,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -76,6 +81,31 @@ class BeatWallService : WallpaperService() {
         private var isCharging = false
         private var isLowBattery = false
         private var lastEnvCacheMs = 0L
+
+        // Subtle gravity-sensor tilt parallax (active only when visible & not low-battery)
+        private val sensorManager by lazy { getSystemService(Context.SENSOR_SERVICE) as? SensorManager }
+        private val gravitySensor by lazy { sensorManager?.getDefaultSensor(Sensor.TYPE_GRAVITY) }
+        private var targetTiltX = 0f
+        private var targetTiltY = 0f
+        private var smoothTiltX = 0f
+        private var smoothTiltY = 0f
+        private var tiltRegistered = false
+
+        private val tiltListener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                if (event.values.size >= 2) {
+                    targetTiltX = (-event.values[0] / 4.5f).coerceIn(-1f, 1f)
+                    targetTiltY = ((event.values[1] - 6.2f) / 4.5f).coerceIn(-1f, 1f)
+                }
+            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+
+        // Instant live refresh when Quick Settings tile or MainActivity changes world/time
+        private val prefsChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+            lastEnvCacheMs = 0L
+            lastSkyComputeMs = 0L
+        }
         private var cachedDay = 1
         private var cachedDayOfYear = 1
         private var cachedMin = 720
@@ -331,10 +361,18 @@ class BeatWallService : WallpaperService() {
                 ContextCompat.RECEIVER_NOT_EXPORTED
             )
             updateBatteryFlags(stickyBatt)
+            applicationContext.getSharedPreferences("beatwall_prefs", Context.MODE_PRIVATE)
+                .registerOnSharedPreferenceChangeListener(prefsChangeListener)
         }
 
         override fun onDestroy() {
             stopLoop()
+            unregisterTiltSensor()
+            try {
+                applicationContext.getSharedPreferences("beatwall_prefs", Context.MODE_PRIVATE)
+                    .unregisterOnSharedPreferenceChangeListener(prefsChangeListener)
+            } catch (_: Exception) {
+            }
             tracker.removeListener(this)
             try {
                 unregisterReceiver(systemReceiver)
@@ -411,16 +449,34 @@ class BeatWallService : WallpaperService() {
             super.onSurfaceDestroyed(holder)
         }
 
+        private fun registerTiltSensor() {
+            if (tiltRegistered || isLowBattery) return
+            val sm = sensorManager ?: return
+            val s = gravitySensor ?: return
+            tiltRegistered = sm.registerListener(tiltListener, s, SensorManager.SENSOR_DELAY_UI)
+        }
+
+        private fun unregisterTiltSensor() {
+            if (!tiltRegistered) return
+            try {
+                sensorManager?.unregisterListener(tiltListener)
+            } catch (_: Exception) {
+            }
+            tiltRegistered = false
+        }
+
         override fun onVisibilityChanged(visible: Boolean) {
             this.visible = visible
             if (visible && powerManager.isInteractive) {
                 lastSkyComputeMs = 0L
                 lastEnvCacheMs = 0L
+                registerTiltSensor()
                 mainHandler.post { tracker.refreshActiveSessions() }
                 snapToCurrentPosition()
                 updateLoopState()
             } else {
                 lastHiddenAtMs = SystemClock.elapsedRealtime()
+                unregisterTiltSensor()
                 stopLoop()
             }
         }
@@ -1206,7 +1262,11 @@ class BeatWallService : WallpaperService() {
 
             canvas.restore()
 
-            // 4. 366-Day Living Landscape Engine (5 Worlds, Alpenglow, Biology, Lock<->Home 3D Parallax)
+            // Smoothly low-pass filter tilt parallax at 120 Hz
+            smoothTiltX += (targetTiltX - smoothTiltX) * 0.08f
+            smoothTiltY += (targetTiltY - smoothTiltY) * 0.08f
+
+            // 4. 366-Day Living Landscape Engine (20 Worlds, Alpenglow, Biology, Tilt + Lock<->Home 3D Parallax)
             landscapeEngine.drawForeground(
                 canvas = canvas,
                 width = width,
@@ -1222,7 +1282,9 @@ class BeatWallService : WallpaperService() {
                 moonY = moonY,
                 lockBlend = lockBlend,
                 timeSec = timeSec,
-                masterAlpha = masterAlpha
+                masterAlpha = masterAlpha,
+                tiltX = smoothTiltX,
+                tiltY = smoothTiltY
             )
         }
 
