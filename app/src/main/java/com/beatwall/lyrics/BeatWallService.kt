@@ -106,6 +106,24 @@ class BeatWallService : WallpaperService() {
             lastEnvCacheMs = 0L
             lastSkyComputeMs = 0L
         }
+
+        // Debounced SystemUI color notification (fires after crossfade finishes so One UI never hitches mid-transition)
+        private val deferredColorsRunnable = Runnable {
+            try {
+                notifyColorsChanged()
+            } catch (_: Exception) {
+            }
+        }
+
+        // Deferred tilt-sensor registration (keeps Frame 1 after unlock/app-exit 100% pure Canvas drawing)
+        private val deferredTiltRegisterRunnable = Runnable {
+            if (visible && powerManager.isInteractive) registerTiltSensor()
+        }
+
+        // Long-idle-only session resync (runs after unlock animation finishes, never blocking Frame 1)
+        private val deferredSessionRefreshRunnable = Runnable {
+            if (visible && powerManager.isInteractive) tracker.refreshActiveSessions()
+        }
         private var cachedDay = 1
         private var cachedDayOfYear = 1
         private var cachedMin = 720
@@ -367,6 +385,9 @@ class BeatWallService : WallpaperService() {
 
         override fun onDestroy() {
             stopLoop()
+            mainHandler.removeCallbacks(deferredColorsRunnable)
+            mainHandler.removeCallbacks(deferredTiltRegisterRunnable)
+            mainHandler.removeCallbacks(deferredSessionRefreshRunnable)
             unregisterTiltSensor()
             try {
                 applicationContext.getSharedPreferences("beatwall_prefs", Context.MODE_PRIVATE)
@@ -468,14 +489,26 @@ class BeatWallService : WallpaperService() {
         override fun onVisibilityChanged(visible: Boolean) {
             this.visible = visible
             if (visible && powerManager.isInteractive) {
-                lastSkyComputeMs = 0L
-                lastEnvCacheMs = 0L
-                registerTiltSensor()
-                mainHandler.post { tracker.refreshActiveSessions() }
+                val hiddenMs = if (lastHiddenAtMs > 0L) SystemClock.elapsedRealtime() - lastHiddenAtMs else 0L
+                // Keep warm in-memory sky/weather caches on quick unlocks, app switches, shade & drawer toggles
+                if (hiddenMs > 15_000L || lastEnvCacheMs == 0L) {
+                    lastSkyComputeMs = 0L
+                    lastEnvCacheMs = 0L
+                }
+                // Defer tilt sensor registration past Frame 1 so launcher transitions stay locked at 120 Hz
+                mainHandler.removeCallbacks(deferredTiltRegisterRunnable)
+                mainHandler.postDelayed(deferredTiltRegisterRunnable, 120L)
+                // Active session listener already tracks media live; only force-resync after >60s hidden, off Frame 1
+                if (hiddenMs > 60_000L) {
+                    mainHandler.removeCallbacks(deferredSessionRefreshRunnable)
+                    mainHandler.postDelayed(deferredSessionRefreshRunnable, 350L)
+                }
                 snapToCurrentPosition()
                 updateLoopState()
             } else {
                 lastHiddenAtMs = SystemClock.elapsedRealtime()
+                mainHandler.removeCallbacks(deferredTiltRegisterRunnable)
+                mainHandler.removeCallbacks(deferredSessionRefreshRunnable)
                 unregisterTiltSensor()
                 stopLoop()
             }
@@ -489,13 +522,16 @@ class BeatWallService : WallpaperService() {
 
                 if (prevKey != newKey) {
                     if (activeState != null || state != null) {
-                        prevState = activeState
-                        prevCenteredLayouts = centeredLayouts
-                        prevLyricYCenters = lyricYCenters
-                        prevLyricMaxLineW = lyricMaxLineW
-                        prevAvgLineStep = avgLineStep
-                        prevSpringY = springY
-                        prevLyricsAlpha = lyricsAlpha
+                        // Preserve original outgoing scene if a rapid second metadata update arrives before dissolve begins
+                        if (!isCrossfading || crossfadeProgress > 0.05f) {
+                            prevState = activeState
+                            prevCenteredLayouts = centeredLayouts
+                            prevLyricYCenters = lyricYCenters
+                            prevLyricMaxLineW = lyricMaxLineW
+                            prevAvgLineStep = avgLineStep
+                            prevSpringY = springY
+                            prevLyricsAlpha = lyricsAlpha
+                        }
                         isCrossfading = true
                         crossfadeProgress = 0f
                         crossfadeStartNanos = 0L
@@ -530,10 +566,8 @@ class BeatWallService : WallpaperService() {
                     eqAmp = 0f
                 }
                 if (artChanged) {
-                    try {
-                        notifyColorsChanged()
-                    } catch (_: Exception) {
-                    }
+                    mainHandler.removeCallbacks(deferredColorsRunnable)
+                    mainHandler.postDelayed(deferredColorsRunnable, 1000L)
                 }
                 rebuildLayoutsIfNeeded(force = false)
                 if (visible && powerManager.isInteractive) {
@@ -730,9 +764,8 @@ class BeatWallService : WallpaperService() {
                 lastFrameNanos = frameTimeNanos
 
                 if (isCrossfading) {
-                    if (crossfadeStartNanos == 0L) crossfadeStartNanos = frameTimeNanos
-                    val elapsed = frameTimeNanos - crossfadeStartNanos
-                    crossfadeProgress = (elapsed.toFloat() / crossfadeDurationNanos).coerceIn(0f, 1f)
+                    val durSec = (crossfadeDurationNanos / 1_000_000_000f).coerceAtLeast(0.35f)
+                    crossfadeProgress = (crossfadeProgress + dtSec / durSec).coerceIn(0f, 1f)
                     if (crossfadeProgress >= 1f) {
                         isCrossfading = false
                         prevState = null
