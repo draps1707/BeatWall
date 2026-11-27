@@ -472,9 +472,9 @@ class BeatWallService : WallpaperService() {
         }
 
         override fun onZoomChanged(zoom: Float) {
-            val prevZoomed = wallpaperZoom > 0.12f
+            val prevZoomed = wallpaperZoom > 0.08f
             wallpaperZoom = zoom.coerceIn(0f, 1f)
-            val nowZoomed = wallpaperZoom > 0.12f
+            val nowZoomed = wallpaperZoom > 0.08f
             if (prevZoomed != nowZoomed && visible && powerManager.isInteractive) {
                 updateLoopState()
             }
@@ -650,6 +650,8 @@ class BeatWallService : WallpaperService() {
 
         private fun needsAnimation(): Boolean {
             if (!visible || !surfaceReady || !powerManager.isInteractive) return false
+            // Pause to 0 fps while One UI blurs/zooms the wallpaper (App Drawer, folders, app open/close)
+            if (wallpaperZoom > 0.08f && !isCrossfading) return false
             val targetLock = if (keyguardManager.isKeyguardLocked) 1f else 0f
             if (abs(targetLock - lockBlend) > 0.005f || abs(lockVel) > 0.01f) return true
             if (isCrossfading) return true
@@ -663,12 +665,7 @@ class BeatWallService : WallpaperService() {
         }
 
         private fun isHighRateNeeded(): Boolean {
-            // Keep smooth 120Hz rendering on Home/Lock when visible and not in low-battery mode.
-            // Yield to ~30Hz while One UI zooms/blurs the wallpaper behind an opening/closing app
-            // so the launcher animation gets the full GPU budget, and drop to 0fps when hidden.
-            if (isLowBattery) return false
-            if (wallpaperZoom > 0.12f && !isCrossfading) return false
-            return true
+            return !isLowBattery
         }
 
         private fun preferredHighFrameRate(): Float {
@@ -687,10 +684,9 @@ class BeatWallService : WallpaperService() {
 
         private fun targetFrameRate(): Float {
             if (!needsAnimation()) return 0f
-            // Request a display rate closer to the actual workload. Calm scenes
-            // draw at ~30fps; transitions and active music use the device's
-            // supported high-refresh mode rather than an assumed 120Hz.
-            return if (isHighRateNeeded()) preferredHighFrameRate() else 30f
+            // Never down-vote SurfaceFlinger to 30f (which pulls One UI off 120Hz);
+            // return preferredHighFrameRate() when active or 0f ("no preference") otherwise.
+            return if (isHighRateNeeded()) preferredHighFrameRate() else 0f
         }
 
         private fun scheduleNextFrame() {
@@ -724,6 +720,7 @@ class BeatWallService : WallpaperService() {
             lowRateCallbackPending = false
             choreographer.removeFrameCallback(this)
             mainHandler.removeCallbacks(lowRateFrameRunnable)
+            setSurfaceFrameRate(0f)
         }
 
         private fun setSurfaceFrameRate(hz: Float) {
@@ -846,7 +843,7 @@ class BeatWallService : WallpaperService() {
                 // Keep the surface hint aligned with the render cadence. This
                 // avoids requesting a high refresh rate while the low-motion loop
                 // is drawing only about 30 frames per second.
-                setSurfaceFrameRate(if (highRate) preferredHighFrameRate() else 30f)
+                setSurfaceFrameRate(if (highRate) preferredHighFrameRate() else 0f)
                 if (highRate || (frameTimeNanos - lastDrawNanos) >= 31_000_000L) {
                     lastDrawNanos = frameTimeNanos
                     drawFrame(frameTimeNanos)
