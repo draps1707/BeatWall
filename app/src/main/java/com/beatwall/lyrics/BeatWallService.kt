@@ -109,6 +109,43 @@ class BeatWallService : WallpaperService() {
             return built
         }
 
+        // 16-slot quantized LinearGradient cache for zero-allocation 120 Hz karaoke sweeps
+        private val sweepShaderKeys = LongArray(16) { Long.MIN_VALUE }
+        private val sweepShaders = arrayOfNulls<LinearGradient>(16)
+        private var sweepShaderCursor = 0
+        private val interludeNotes = arrayOf("♪", "♫", "♪", "♬")
+        private val lyricHslBuf = FloatArray(3)
+
+        private fun getCachedSweepShader(sungCol: Int, unsungCol: Int): LinearGradient {
+            val sA = (((Color.alpha(sungCol) + 4) / 8) * 8).coerceIn(0, 255)
+            val uA = (((Color.alpha(unsungCol) + 4) / 8) * 8).coerceIn(0, 255)
+            val sQ = (sungCol and 0x00FFFFFF) or (sA shl 24)
+            val uQ = (unsungCol and 0x00FFFFFF) or (uA shl 24)
+            val key = (sQ.toLong() shl 32) or (uQ.toLong() and 0xFFFFFFFFL)
+            for (i in sweepShaderKeys.indices) {
+                val sh = sweepShaders[i]
+                if (sh != null && sweepShaderKeys[i] == key) return sh
+            }
+            val built = LinearGradient(
+                -1f, 0f, 1f, 0f,
+                intArrayOf(sQ, uQ),
+                null, Shader.TileMode.CLAMP
+            )
+            val idx = sweepShaderCursor
+            sweepShaderCursor = (sweepShaderCursor + 1) % sweepShaders.size
+            sweepShaderKeys[idx] = key
+            sweepShaders[idx] = built
+            return built
+        }
+
+        private fun boostLyricAccent(accentColor: Int): Int {
+            ColorUtils.colorToHSL(accentColor, lyricHslBuf)
+            // Keep hue authentic to album art while guaranteeing crisp contrast against both dark & bright covers
+            lyricHslBuf[1] = lyricHslBuf[1].coerceIn(0.62f, 0.96f)
+            lyricHslBuf[2] = lyricHslBuf[2].coerceIn(0.66f, 0.80f)
+            return ColorUtils.HSLToColor(lyricHslBuf)
+        }
+
         // Instant live refresh when Quick Settings tile or MainActivity changes world/time
         private val prefsChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
             lastEnvCacheMs = 0L
@@ -826,10 +863,10 @@ class BeatWallService : WallpaperService() {
                         targetY = if (newIdx in lyricYCenters.indices) lyricYCenters[newIdx] else 0f
                     }
 
-                    // Critically-damped 120Hz glide (~420ms)
+                    // Critically-damped 120Hz liquid glide (~600ms)
                     val diff = targetY - springY
                     if (abs(diff) > 0.25f || abs(springVelocity) > 0.6f) {
-                        val omega = 11.5f
+                        val omega = 6.5f
                         val accel = omega * omega * diff - 2f * omega * springVelocity
                         springVelocity += accel * dtSec
                         springY += springVelocity * dtSec
@@ -956,6 +993,11 @@ class BeatWallService : WallpaperService() {
                 val breathSec = if (isLongFormFocus) 22.0 else art.moodBreathPeriodSec
                 val breathAmp = if (isLongFormFocus) 0.009f else 0.0175f
                 drawBreathingBackdrop(canvas, art.blurredBackdrop, state.isPlaying && !isLowBattery, timeSec, masterAlpha, breathSec, breathAmp)
+                // Gentle readability scrim so bright silver/peach covers never wash out 2-shade lyrics
+                orbPaint.shader = null
+                orbPaint.color = 0xFF05070D.toInt()
+                orbPaint.alpha = (masterAlpha * 0.26f).toInt().coerceIn(0, 255)
+                canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), orbPaint)
             }
 
             val accent = art?.lyricAccentColor ?: 0xFF7DD3FC.toInt()
@@ -964,8 +1006,9 @@ class BeatWallService : WallpaperService() {
             val moodScale = art?.moodGlowScale ?: 1.0f
             val physicsRegime = if (isLongFormFocus) 0 else (art?.moodRegime ?: 2)
 
-            if (!isLock && (state.isPlaying || proceduralAnimator.isCoasting()) && !isLowBattery) {
-                val animScale = moodScale * (1f - 0.25f * gapRelaxFactor) * (if (isLongFormFocus) 0.50f else 1.0f)
+            val homeAnimFade = (1f - lockBlend).coerceIn(0f, 1f)
+            if (homeAnimFade > 0.02f && (state.isPlaying || proceduralAnimator.isCoasting()) && !isLowBattery) {
+                val animScale = moodScale * homeAnimFade * (1f - 0.25f * gapRelaxFactor) * (if (isLongFormFocus) 0.50f else 1.0f)
                 val animAlpha = (masterAlpha * animScale).toInt().coerceIn(0, 255)
                 proceduralAnimator.draw(
                     canvas = canvas,
@@ -998,8 +1041,8 @@ class BeatWallService : WallpaperService() {
             val stepPx = if (isCurrent) avgLineStep else prevAvgLineStep
             val yScroll = if (isCurrent) springY else prevSpringY
             val clipTop = height * (0.225f + (0.42f - 0.225f) * lb)
-            val clipBottom = height * (0.785f + (0.74f - 0.785f) * lb)
-            val centerY = height * (0.49f + (0.572f - 0.49f) * lb)
+            val clipBottom = height * (0.805f + (0.74f - 0.805f) * lb)
+            val centerY = height * (0.505f + (0.572f - 0.505f) * lb)
             val centerX = width * 0.06f
 
             if (lyrAlpha > 2 && layouts.isNotEmpty() && centers.isNotEmpty()) {
@@ -1727,24 +1770,38 @@ class BeatWallService : WallpaperService() {
             val maxIdx = minOf(layouts.lastIndex, state.lyrics.lastIndex, yCenters.lastIndex)
             if (maxIdx < 0) return
 
-            val approxIdx = LrcParser.findLineIndex(state.lyrics, state.currentPositionMs()).coerceIn(0, maxIdx)
-            val start = (approxIdx - 3).coerceAtLeast(0)
-            val end = (approxIdx + 3).coerceAtMost(maxIdx)
-            val clipH = (clipBottom - clipTop).coerceAtLeast(1f)
-            val mistZone = clipH * 0.11f
             val posMs = state.currentPositionMs()
+            val approxIdx = LrcParser.findLineIndex(state.lyrics, posMs).coerceIn(0, maxIdx)
+            // Anchor the 9-line (-4..+4) window to visual scrollY so outer lines never pop in/out on timestamp ticks
+            var visualCenterIdx = approxIdx
+            var bestDist = Float.MAX_VALUE
+            val scanLo = (approxIdx - 5).coerceAtLeast(0)
+            val scanHi = (approxIdx + 5).coerceAtMost(maxIdx)
+            for (k in scanLo..scanHi) {
+                val d = abs(yCenters[k] - scrollY)
+                if (d < bestDist) {
+                    bestDist = d
+                    visualCenterIdx = k
+                }
+            }
+            val start = (visualCenterIdx - 4).coerceAtLeast(0)
+            val end = (visualCenterIdx + 4).coerceAtMost(maxIdx)
+            val clipH = (clipBottom - clipTop).coerceAtLeast(1f)
+            val mistZone = clipH * 0.14f
             val isPlaying = state.isPlaying && !isLowBattery
 
-            // Stretch 7-step vertical spread on Home Screen so -3..+3 reach bottom-left & top-right Blue Circles,
-            // while blending smoothly back to compact spacing on Lockscreen via lockBlend.
+            // Smoothly bloom 9-line diagonal on Homescreen and fold cleanly into compact Lockscreen above fingerprint icon
             val safeStep = lineStepPx.coerceAtLeast(1f)
-            val homeStep = (clipH / 6.8f).coerceAtLeast(safeStep)
+            val homeStep = (clipH / 8.2f).coerceAtLeast(safeStep * 0.92f)
             val effectiveStep = homeStep + (safeStep - homeStep) * lockBlend
-            val spreadRatio = (effectiveStep / safeStep).coerceIn(1f, 1.85f)
+            val spreadRatio = (effectiveStep / safeStep).coerceIn(0.92f, 1.85f)
 
-            // FAINT (white-mixed pastel of bestColor) -> DEEP (pure saturated bestColor), ZERO pure white snap
-            val deepRgb = accentColor and 0x00FFFFFF
-            val faintRgb = ColorUtils.blendARGB(accentColor, Color.WHITE, 0.65f) and 0x00FFFFFF
+            // Strictly 2 shades of the song's vibrant color (NO grey stage!):
+            // Shade 1 (Unsung): clean white-mixed pastel tint of vibrantColor
+            // Shade 2 (Sung):   full vibrant proper color sweeping smoothly letter-by-letter
+            val vibrantColor = boostLyricAccent(accentColor)
+            val sungRgb = vibrantColor and 0x00FFFFFF
+            val unsungRgb = ColorUtils.blendARGB(vibrantColor, Color.WHITE, 0.52f) and 0x00FFFFFF
 
             for (i in start..end) {
                 val layout = layouts[i]
@@ -1757,46 +1814,43 @@ class BeatWallService : WallpaperService() {
                 val mistFactor = minOf(topFade, botFade)
                 if (mistFactor <= 0.005f) continue
 
-                // 7-step pyramid: Step 0 (Centre) biggest & sharpest -> +/-1, +/-2, +/-3 progressively smaller & fainter
+                // 9-step graceful pyramid: dead center biggest & sharpest -> +/-1..+/-4 progressively smaller & softer
                 val stepDist = abs(rawOffset) / safeStep
-                val focusStrength = 1f - smoothstep((stepDist / 0.65f).coerceIn(0f, 1f))
-                val distFade = (1f / (1f + 0.90f * stepDist * stepDist)).coerceIn(0.10f, 1.0f)
-                val pausedScale = if (isPlaying) 1.0f else 0.72f
+                val distFade = (1f / (1f + 0.58f * stepDist * stepDist)).coerceIn(0.12f, 1.0f)
+                val pausedScale = if (isPlaying) 1.0f else 0.78f
                 val lineAlpha = (masterAlpha * distFade * mistFactor * pausedScale).toInt().coerceIn(0, 255)
                 if (lineAlpha <= 2) continue
 
-                // Bottom-left -> full-width Centre -> Top-right diagonal staircase
-                val scale = (1.06f - 0.60f * smoothstep((stepDist / 3.0f).coerceIn(0f, 1f))).coerceIn(0.44f, 1.06f)
-                val relY = (lineOffset / (clipH * 0.48f)).coerceIn(-1.2f, 1.2f)
+                // True corner-to-corner diagonal: Total Bottom-Left (4%) -> Dead Center -> Total Top-Right (96%)
+                val scale = (1.06f - 0.56f * smoothstep((stepDist / 3.8f).coerceIn(0f, 1f))).coerceIn(0.46f, 1.06f)
+                val relY = (lineOffset / (clipH * 0.44f)).coerceIn(-1f, 1f)
                 val maxLw = if (i in maxLineWidths.indices) maxLineWidths[i] else 0f
-                val alignBias = -relY.coerceIn(-1f, 1f)
-                val alignShift = alignBias * ((layout.width - maxLw * scale) * 0.36f).coerceAtLeast(0f)
-                val diagShift = -relY * (width * 0.21f) * (1f - focusStrength)
-                val rawDx = alignShift + diagShift
                 val halfScaledW = (maxLw * scale) * 0.5f
                 val layoutCenterX = centerX + layout.width * 0.5f
-                val minDx = (width * 0.05f + halfScaledW) - layoutCenterX
-                val maxDx = (width * 0.95f - halfScaledW) - layoutCenterX
-                val dx = if (minDx <= maxDx) rawDx.coerceIn(minDx, maxDx) else 0f
+                val leftEdgeDx = (width * 0.04f + halfScaledW) - layoutCenterX
+                val rightEdgeDx = (width * 0.96f - halfScaledW) - layoutCenterX
+                val dx = when {
+                    relY > 0f -> leftEdgeDx * smoothstep(relY)
+                    relY < 0f -> rightEdgeDx * smoothstep(-relY)
+                    else -> 0f
+                }
 
                 canvas.save()
                 canvas.translate(centerX + dx, yPos)
                 canvas.scale(scale, scale, layout.width / 2f, layout.height / 2f)
 
                 if (state.lyrics[i].isInterlude) {
-                    // Sequential bouncing & breathing music notes (♪ ♫ ♪ ♬) instead of 3 dots
-                    val notes = arrayOf("♪", "♫", "♪", "♬")
                     val noteGap = width * 0.044f
                     val baseX = layout.width / 2f
                     val noteY = layout.height / 2f + width * 0.012f
                     instNotePaint.textSize = width * 0.048f
-                    instNotePaint.color = accentColor
+                    instNotePaint.color = vibrantColor
                     for (n in 0 until 4) {
                         val nPhase = studioPhase * 3.8 - n * 0.85
                         val breath = 0.50f + 0.50f * ((sin(nPhase) + 1.0) * 0.5).toFloat()
                         val bounce = -kotlin.math.abs(sin(nPhase)).toFloat() * (width * 0.014f) * eqAmp
-                        instNotePaint.alpha = (lineAlpha * (0.35f + 0.65f * breath * eqAmp)).toInt().coerceIn(20, 255)
-                        canvas.drawText(notes[n], baseX + (n - 1.5f) * noteGap, noteY + bounce, instNotePaint)
+                        instNotePaint.alpha = (lineAlpha * (0.38f + 0.62f * breath * eqAmp)).toInt().coerceIn(20, 255)
+                        canvas.drawText(interludeNotes[n], baseX + (n - 1.5f) * noteGap, noteY + bounce, instNotePaint)
                     }
                 } else {
                     val lineStart = state.lyrics[i].timeMs
@@ -1808,18 +1862,21 @@ class BeatWallService : WallpaperService() {
                         else -> 0.0f
                     }
 
-                    val deepTint = deepRgb or (lineAlpha shl 24)
-                    val faintTint = faintRgb or (((lineAlpha * 0.40f).toInt().coerceIn(0, 255)) shl 24)
+                    // Strictly 2 clean states: Shade 1 (white-mixed pastel) -> Shade 2 (full vibrant proper color)
+                    val sungTint = sungRgb or (lineAlpha shl 24)
+                    val unsungTint = unsungRgb or (((lineAlpha * 0.64f).toInt().coerceIn(0, 255)) shl 24)
+                    val shadowAlpha = (lineAlpha * 0.42f).toInt().coerceIn(0, 120)
+                    layout.paint.setShadowLayer(density * 3.0f, 0f, density * 1.0f, (shadowAlpha shl 24))
 
-                    if (totalSweepFrac <= 0.005f || lineAlpha < 252) {
+                    if (totalSweepFrac <= 0.005f || lineAlpha < 20) {
                         layout.paint.shader = null
                         layout.paint.style = Paint.Style.FILL
-                        layout.paint.color = if (i < approxIdx) deepTint else faintTint
+                        layout.paint.color = if (i < approxIdx) sungTint else unsungTint
                         layout.draw(canvas)
                     } else if (totalSweepFrac >= 0.995f) {
                         layout.paint.shader = null
                         layout.paint.style = Paint.Style.FILL
-                        layout.paint.color = deepTint
+                        layout.paint.color = sungTint
                         layout.draw(canvas)
                     } else {
                         val lineCount = layout.lineCount.coerceAtLeast(1)
@@ -1829,20 +1886,7 @@ class BeatWallService : WallpaperService() {
                         }
                         var consumedW = 0f
                         val sungTargetW = totalW * totalSweepFrac
-
-                        val sweepKey = (deepTint.toLong() shl 32) or (faintTint.toLong() and 0xFFFFFFFFL)
-                        val baseSweepShader = if (cachedSweepKey == sweepKey && cachedSweepShader != null) {
-                            cachedSweepShader!!
-                        } else {
-                            LinearGradient(
-                                -1f, 0f, 1f, 0f,
-                                intArrayOf(deepTint, faintTint),
-                                null, Shader.TileMode.CLAMP
-                            ).also {
-                                cachedSweepKey = sweepKey
-                                cachedSweepShader = it
-                            }
-                        }
+                        val baseSweepShader = getCachedSweepShader(sungTint, unsungTint)
 
                         layout.paint.style = Paint.Style.FILL
                         for (l in 0 until lineCount) {
@@ -1863,13 +1907,13 @@ class BeatWallService : WallpaperService() {
 
                             if (localFrac <= 0.005f) {
                                 layout.paint.shader = null
-                                layout.paint.color = faintTint
+                                layout.paint.color = unsungTint
                             } else if (localFrac >= 0.995f) {
                                 layout.paint.shader = null
-                                layout.paint.color = deepTint
+                                layout.paint.color = sungTint
                             } else {
                                 val sweepX = leftEdge + lw * localFrac
-                                val softEdge = 16f // ~32px (1-letter wide) crisp FAINT -> DEEP sweep
+                                val softEdge = 12f // ~24px crisp letter-by-letter Shade 1 -> Shade 2 transition
                                 shaderMatrix.reset()
                                 shaderMatrix.setScale(softEdge, 1f)
                                 shaderMatrix.postTranslate(sweepX, 0f)
@@ -1881,6 +1925,7 @@ class BeatWallService : WallpaperService() {
                         }
                         layout.paint.shader = null
                     }
+                    layout.paint.clearShadowLayer()
                 }
 
                 canvas.restore()

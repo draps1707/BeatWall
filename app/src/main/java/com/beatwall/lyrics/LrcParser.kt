@@ -10,7 +10,7 @@ object LrcParser {
     private val TIMESTAMP_REGEX = Regex("""\[(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?]""")
     private val META_TAG_REGEX = Regex("""^\[(?:ti|ar|al|au|length|by|offset|re|ve):.*]$""", RegexOption.IGNORE_CASE)
     private val SYMBOL_ONLY_REGEX = Regex("""^[\s♪♫•·.\-_*~]+$""")
-    private const val INTERLUDE_GAP_MS = 6000L
+    private const val INTERLUDE_GAP_MS = 14000L
 
     fun parse(rawLrc: String?): List<LyricLine> {
         if (rawLrc.isNullOrBlank()) return emptyList()
@@ -67,7 +67,7 @@ object LrcParser {
             if (result.isNotEmpty() && !result.last().isInterlude && !curr.isInterlude) {
                 val gap = curr.timeMs - result.last().timeMs
                 if (gap > INTERLUDE_GAP_MS) {
-                    result.add(LyricLine(result.last().timeMs + 2500L, "• • •", isInterlude = true))
+                    result.add(LyricLine(result.last().timeMs + 4500L, "• • •", isInterlude = true))
                 }
             }
             result.add(curr)
