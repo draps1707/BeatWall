@@ -140,9 +140,9 @@ class BeatWallService : WallpaperService() {
 
         private fun boostLyricAccent(accentColor: Int): Int {
             ColorUtils.colorToHSL(accentColor, lyricHslBuf)
-            // Keep hue authentic to album art while guaranteeing crisp contrast against both dark & bright covers
-            lyricHslBuf[1] = lyricHslBuf[1].coerceIn(0.62f, 0.96f)
-            lyricHslBuf[2] = lyricHslBuf[2].coerceIn(0.66f, 0.80f)
+            // High-vibrancy saturation & luminance so album colors glow vividly instead of turning muddy/brown
+            lyricHslBuf[1] = lyricHslBuf[1].coerceIn(0.82f, 1.0f)
+            lyricHslBuf[2] = lyricHslBuf[2].coerceIn(0.62f, 0.76f)
             return ColorUtils.HSLToColor(lyricHslBuf)
         }
 
@@ -1800,7 +1800,7 @@ class BeatWallService : WallpaperService() {
             // Shade 1 (Unsung & all outer lines): Soft Translucent Album Color (no plain white stealing brightness)
             // Shade 2 (Active sung sweep): Bright White-Hot Pastel Glow of that same album color
             val vibrantColor = boostLyricAccent(accentColor)
-            val sungRgb = ColorUtils.blendARGB(vibrantColor, Color.WHITE, 0.65f) and 0x00FFFFFF
+            val sungRgb = ColorUtils.blendARGB(vibrantColor, Color.WHITE, 0.48f) and 0x00FFFFFF
             val unsungRgb = vibrantColor and 0x00FFFFFF
 
             for (i in start..end) {
@@ -1865,9 +1865,18 @@ class BeatWallService : WallpaperService() {
                     // Strictly 2 clean states: Soft Translucent White -> Luminous Album Color
                     // Already-sung lines smoothly relax back into Soft White as they rise above center (zero 3rd shade)
                     val sungTint = sungRgb or (lineAlpha shl 24)
-                    val unsungTint = unsungRgb or (((lineAlpha * 0.54f).toInt().coerceIn(0, 255)) shl 24)
+                    val unsungTint = unsungRgb or (((lineAlpha * 0.74f).toInt().coerceIn(0, 255)) shl 24)
+                    val releaseFade = if (i < approxIdx) {
+                        val nextLineMs = state.lyrics[approxIdx].timeMs
+                        (1f - ((posMs - nextLineMs).coerceAtLeast(0L) / 450f)).coerceIn(0f, 1f)
+                    } else 0f
 
-                    if (i != approxIdx || totalSweepFrac <= 0.005f || lineAlpha < 20) {
+                    if (releaseFade > 0.02f) {
+                        layout.paint.shader = null
+                        layout.paint.style = Paint.Style.FILL
+                        layout.paint.color = ColorUtils.blendARGB(unsungTint, sungTint, releaseFade)
+                        layout.draw(canvas)
+                    } else if (i != approxIdx || totalSweepFrac <= 0.005f || lineAlpha < 20) {
                         layout.paint.shader = null
                         layout.paint.style = Paint.Style.FILL
                         layout.paint.color = unsungTint
