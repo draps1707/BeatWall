@@ -182,7 +182,7 @@ class LandscapeEngine {
     }
 
     fun horizonY(height: Int, lockBlend: Float): Float {
-        return height * (0.64f + 0.05f * lockBlend)
+        return height * (0.64f + 0.035f * lockBlend)
     }
 
     fun skyClarityBoost(dayOfYear: Int): Float {
@@ -1201,9 +1201,7 @@ class LandscapeEngine {
         moonY: Float,
         lockBlend: Float,
         timeSec: Double,
-        masterAlpha: Int,
-        tiltX: Float = 0f,
-        tiltY: Float = 0f
+        masterAlpha: Int
     ) {
         // Wallpaper surfaces can briefly report zero dimensions during lifecycle
         // transitions. Skip safely rather than building degenerate cached geometry.
@@ -1215,11 +1213,9 @@ class LandscapeEngine {
 
         val horizonY = horizonY(height, lockBlend)
         val baseHorizon = height * 0.64f
-        val baseShiftY = horizonY - baseHorizon
-        val tiltVert = tiltY * density * 4.5f
-        val horizonShiftY = baseShiftY + tiltVert * 0.30f
-        val midShiftY = baseShiftY * 0.72f + tiltVert * 0.65f
-        val foreShiftY = baseShiftY * 1.12f + tiltVert * 1.15f
+        val horizonShiftY = horizonY - baseHorizon
+        val midShiftY = horizonShiftY * 0.72f
+        val foreShiftY = horizonShiftY * 1.12f
 
         val isDay = sky.sunAltDeg > -2f
         val isDuskOrNight = sky.sunAltDeg < 2f
@@ -1274,15 +1270,7 @@ class LandscapeEngine {
         val frameMistShader = mistPaint.shader
         val frameMistStrokeWidth = mistPaint.strokeWidth
         val frameMistStrokeCap = mistPaint.strokeCap
-        val tiltSaved = abs(tiltX) > 0.002f || abs(tiltY) > 0.002f
         try {
-            // Occasional shooting stars on clear dark nights (behind mountain peaks & silhouettes)
-            drawRareShootingStars(canvas, width, height, density, sky, weather, timeSec, masterAlpha)
-            if (tiltSaved) {
-                canvas.save()
-                canvas.scale(1.028f, 1.028f, width * 0.5f, height * 0.5f)
-                canvas.translate(tiltX * density * 6.0f, 0f)
-            }
             // Daytime sky wildlife across fitting biomes (hidden in rain/storms; behind foreground silhouettes)
             if ((isDay || alpenglow > 0.1f) && weather.sky != SkyWeather.RAIN && weather.sky != SkyWeather.THUNDERSTORM) {
                 when (biome) {
@@ -1981,7 +1969,6 @@ class LandscapeEngine {
                 else -> {}
             }
         } finally {
-            if (tiltSaved) canvas.restore()
             fillPaint.color = frameFillColor
             fillPaint.alpha = frameFillAlpha
             fillPaint.style = frameFillStyle
@@ -3716,48 +3703,4 @@ class LandscapeEngine {
         }
     }
 
-    private fun drawRareShootingStars(
-        canvas: Canvas, w: Int, h: Int, density: Float,
-        sky: SkySnapshot, weather: WeatherState, timeSec: Double, masterAlpha: Int
-    ) {
-        // Only on clear/mostly-clear dark nights
-        if (sky.sunAltDeg > -7f || weather.cloudCoverPct > 45 ||
-            weather.sky == SkyWeather.RAIN || weather.sky == SkyWeather.THUNDERSTORM
-        ) return
-        val nightStr = ((-7f - sky.sunAltDeg) / 6f).coerceIn(0f, 1f)
-        val period = 28.0
-        val slot = kotlin.math.floor(timeSec / period).toInt()
-        val localT = (timeSec - slot * period).toFloat()
-        val duration = 0.92f
-        if (localT < 0f || localT > duration) return
-
-        val u = (localT / duration).coerceIn(0f, 1f)
-        // Smooth ease-out streak & natural fade in/out
-        val progress = 1f - (1f - u) * (1f - u)
-        val env = sin(u * PI).toFloat().coerceIn(0f, 1f)
-        val r0 = seedRand(slot, 17)
-        val r1 = seedRand(slot, 41)
-        val dir = if (seedRand(slot, 73) > 0.5f) 1f else -1f
-
-        val startX = w * (0.18f + r0 * 0.64f)
-        val startY = h * (0.07f + r1 * 0.20f)
-        val travelX = dir * w * (0.20f + seedRand(slot, 97) * 0.14f)
-        val travelY = h * (0.07f + seedRand(slot, 131) * 0.06f)
-
-        val headX = startX + travelX * progress
-        val headY = startY + travelY * progress
-        val tailFrac = (progress - 0.30f).coerceAtLeast(0f)
-        val tailX = startX + travelX * tailFrac
-        val tailY = startY + travelY * tailFrac
-
-        val alphaGlow = (masterAlpha * 0.28f * env * nightStr).toInt().coerceIn(0, 255)
-        val alphaCore = (masterAlpha * 0.88f * env * nightStr).toInt().coerceIn(0, 255)
-        strokePaint.strokeCap = Paint.Cap.ROUND
-        strokePaint.color = 0xFFBFDFFF.toInt(); strokePaint.alpha = alphaGlow; strokePaint.strokeWidth = density * 2.8f
-        canvas.drawLine(tailX, tailY, headX, headY, strokePaint)
-        strokePaint.color = 0xFFFFFFFF.toInt(); strokePaint.alpha = alphaCore; strokePaint.strokeWidth = density * 1.15f
-        canvas.drawLine(tailX + (headX - tailX) * 0.35f, tailY + (headY - tailY) * 0.35f, headX, headY, strokePaint)
-        fillPaint.color = 0xFFFFFFFF.toInt(); fillPaint.alpha = alphaCore
-        canvas.drawCircle(headX, headY, density * 1.35f, fillPaint)
-    }
 }

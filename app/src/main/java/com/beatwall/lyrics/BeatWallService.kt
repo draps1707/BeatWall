@@ -7,10 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -82,23 +78,35 @@ class BeatWallService : WallpaperService() {
         private var isLowBattery = false
         private var lastEnvCacheMs = 0L
 
-        // Subtle gravity-sensor tilt parallax (active only when visible & not low-battery)
-        private val sensorManager by lazy { getSystemService(Context.SENSOR_SERVICE) as? SensorManager }
-        private val gravitySensor by lazy { sensorManager?.getDefaultSensor(Sensor.TYPE_GRAVITY) }
-        private var targetTiltX = 0f
-        private var targetTiltY = 0f
-        private var smoothTiltX = 0f
-        private var smoothTiltY = 0f
-        private var tiltRegistered = false
+        // Tracks One UI launcher zoom (0f = Home screen, >0.12f = app open/close or drawer blur)
+        // so BeatWall yields GPU budget to One UI's compositor during app transitions.
+        private var wallpaperZoom = 0f
 
-        private val tiltListener = object : SensorEventListener {
-            override fun onSensorChanged(event: SensorEvent) {
-                if (event.values.size >= 2) {
-                    targetTiltX = (-event.values[0] / 4.5f).coerceIn(-1f, 1f)
-                    targetTiltY = ((event.values[1] - 6.2f) / 4.5f).coerceIn(-1f, 1f)
-                }
+        // 24-slot quantized RadialGradient ring cache (eliminates ~1,200 allocations/sec at 120 Hz)
+        private val softRadialColors = IntArray(24) { Int.MIN_VALUE }
+        private val softRadialShaders = arrayOfNulls<RadialGradient>(24)
+        private var softRadialCursor = 0
+
+        private fun getCachedSoftRadialShader(colWithAlpha: Int): RadialGradient {
+            val rgb = colWithAlpha and 0x00FFFFFF
+            val qA = (((Color.alpha(colWithAlpha) + 4) / 8) * 8).coerceIn(0, 255)
+            val key = rgb or (qA shl 24)
+            for (i in softRadialColors.indices) {
+                val sh = softRadialShaders[i]
+                if (sh != null && softRadialColors[i] == key) return sh
             }
-            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+            val midCol = rgb or (((qA * 0.35f).toInt()) shl 24)
+            val built = RadialGradient(
+                0f, 0f, 1f,
+                intArrayOf(key, midCol, Color.TRANSPARENT),
+                floatArrayOf(0f, 0.55f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            val idx = softRadialCursor
+            softRadialCursor = (softRadialCursor + 1) % softRadialShaders.size
+            softRadialColors[idx] = key
+            softRadialShaders[idx] = built
+            return built
         }
 
         // Instant live refresh when Quick Settings tile or MainActivity changes world/time
@@ -113,11 +121,6 @@ class BeatWallService : WallpaperService() {
                 notifyColorsChanged()
             } catch (_: Exception) {
             }
-        }
-
-        // Deferred tilt-sensor registration (keeps Frame 1 after unlock/app-exit 100% pure Canvas drawing)
-        private val deferredTiltRegisterRunnable = Runnable {
-            if (visible && powerManager.isInteractive) registerTiltSensor()
         }
 
         // Long-idle-only session resync (runs after unlock animation finishes, never blocking Frame 1)
@@ -386,9 +389,7 @@ class BeatWallService : WallpaperService() {
         override fun onDestroy() {
             stopLoop()
             mainHandler.removeCallbacks(deferredColorsRunnable)
-            mainHandler.removeCallbacks(deferredTiltRegisterRunnable)
             mainHandler.removeCallbacks(deferredSessionRefreshRunnable)
-            unregisterTiltSensor()
             try {
                 applicationContext.getSharedPreferences("beatwall_prefs", Context.MODE_PRIVATE)
                     .unregisterOnSharedPreferenceChangeListener(prefsChangeListener)
@@ -470,20 +471,13 @@ class BeatWallService : WallpaperService() {
             super.onSurfaceDestroyed(holder)
         }
 
-        private fun registerTiltSensor() {
-            if (tiltRegistered || isLowBattery) return
-            val sm = sensorManager ?: return
-            val s = gravitySensor ?: return
-            tiltRegistered = sm.registerListener(tiltListener, s, SensorManager.SENSOR_DELAY_UI)
-        }
-
-        private fun unregisterTiltSensor() {
-            if (!tiltRegistered) return
-            try {
-                sensorManager?.unregisterListener(tiltListener)
-            } catch (_: Exception) {
+        override fun onZoomChanged(zoom: Float) {
+            val prevZoomed = wallpaperZoom > 0.12f
+            wallpaperZoom = zoom.coerceIn(0f, 1f)
+            val nowZoomed = wallpaperZoom > 0.12f
+            if (prevZoomed != nowZoomed && visible && powerManager.isInteractive) {
+                updateLoopState()
             }
-            tiltRegistered = false
         }
 
         override fun onVisibilityChanged(visible: Boolean) {
@@ -495,9 +489,6 @@ class BeatWallService : WallpaperService() {
                     lastSkyComputeMs = 0L
                     lastEnvCacheMs = 0L
                 }
-                // Defer tilt sensor registration past Frame 1 so launcher transitions stay locked at 120 Hz
-                mainHandler.removeCallbacks(deferredTiltRegisterRunnable)
-                mainHandler.postDelayed(deferredTiltRegisterRunnable, 120L)
                 // Active session listener already tracks media live; only force-resync after >60s hidden, off Frame 1
                 if (hiddenMs > 60_000L) {
                     mainHandler.removeCallbacks(deferredSessionRefreshRunnable)
@@ -507,9 +498,7 @@ class BeatWallService : WallpaperService() {
                 updateLoopState()
             } else {
                 lastHiddenAtMs = SystemClock.elapsedRealtime()
-                mainHandler.removeCallbacks(deferredTiltRegisterRunnable)
                 mainHandler.removeCallbacks(deferredSessionRefreshRunnable)
-                unregisterTiltSensor()
                 stopLoop()
             }
         }
@@ -674,9 +663,12 @@ class BeatWallService : WallpaperService() {
         }
 
         private fun isHighRateNeeded(): Boolean {
-            // Keep smooth 120Hz rendering whenever visible and not in low-battery mode;
-            // still drops to 0fps when hidden via onVisibilityChanged(false).
-            return !isLowBattery
+            // Keep smooth 120Hz rendering on Home/Lock when visible and not in low-battery mode.
+            // Yield to ~30Hz while One UI zooms/blurs the wallpaper behind an opening/closing app
+            // so the launcher animation gets the full GPU budget, and drop to 0fps when hidden.
+            if (isLowBattery) return false
+            if (wallpaperZoom > 0.12f && !isCrossfading) return false
+            return true
         }
 
         private fun preferredHighFrameRate(): Float {
@@ -790,7 +782,7 @@ class BeatWallService : WallpaperService() {
                 val targetLock = if (keyguardManager.isKeyguardLocked) 1f else 0f
                 val lockDiff = targetLock - lockBlend
                 if (abs(lockDiff) > 0.003f || abs(lockVel) > 0.01f) {
-                    val wK = 14.0f
+                    val wK = 5.5f
                     val accK = wK * wK * lockDiff - 2f * wK * lockVel
                     lockVel += accK * dtSec
                     lockBlend = (lockBlend + lockVel * dtSec).coerceIn(0f, 1f)
@@ -1070,19 +1062,7 @@ class BeatWallService : WallpaperService() {
             val orbX = if (sky.sunAltDeg > -4f) sunX else moonX
 
             fun drawSoftOval(cx: Float, cy: Float, rx: Float, ry: Float, colWithAlpha: Int) {
-                val sh = if (cachedSoftMistColor == colWithAlpha && cachedSoftMistShader != null) {
-                    cachedSoftMistShader!!
-                } else {
-                    RadialGradient(
-                        0f, 0f, 1f,
-                        intArrayOf(colWithAlpha, (colWithAlpha and 0x00FFFFFF) or (((Color.alpha(colWithAlpha) * 0.35f).toInt()) shl 24), Color.TRANSPARENT),
-                        floatArrayOf(0f, 0.55f, 1f),
-                        Shader.TileMode.CLAMP
-                    ).also {
-                        cachedSoftMistColor = colWithAlpha
-                        cachedSoftMistShader = it
-                    }
-                }
+                val sh = getCachedSoftRadialShader(colWithAlpha)
                 shaderMatrix.reset()
                 shaderMatrix.setScale(rx, ry)
                 shaderMatrix.postTranslate(cx, cy)
@@ -1295,11 +1275,7 @@ class BeatWallService : WallpaperService() {
 
             canvas.restore()
 
-            // Smoothly low-pass filter tilt parallax at 120 Hz
-            smoothTiltX += (targetTiltX - smoothTiltX) * 0.08f
-            smoothTiltY += (targetTiltY - smoothTiltY) * 0.08f
-
-            // 4. 366-Day Living Landscape Engine (20 Worlds, Alpenglow, Biology, Tilt + Lock<->Home 3D Parallax)
+            // 4. 366-Day Living Landscape Engine (20 Worlds, Alpenglow, Biology, Lock<->Home Parallax)
             landscapeEngine.drawForeground(
                 canvas = canvas,
                 width = width,
@@ -1315,9 +1291,7 @@ class BeatWallService : WallpaperService() {
                 moonY = moonY,
                 lockBlend = lockBlend,
                 timeSec = timeSec,
-                masterAlpha = masterAlpha,
-                tiltX = smoothTiltX,
-                tiltY = smoothTiltY
+                masterAlpha = masterAlpha
             )
         }
 
@@ -1343,26 +1317,16 @@ class BeatWallService : WallpaperService() {
             val rA = width * (0.14f + 0.05f * turnA * eqAmp)
             val rB = width * (0.14f + 0.05f * turnB * eqAmp)
 
-            orbPaint.shader = RadialGradient(
-                cx - sep, cy, rA,
-                intArrayOf(
-                    (0x0038BDF8) or (((masterAlpha * (0.38f + 0.25f * turnA)).toInt()) shl 24),
-                    (0x0038BDF8) or (((masterAlpha * 0.10f).toInt()) shl 24),
-                    Color.TRANSPARENT
-                ),
-                null, Shader.TileMode.CLAMP
-            )
+            val shA = getCachedSoftRadialShader((0x0038BDF8) or (((masterAlpha * (0.38f + 0.25f * turnA)).toInt().coerceIn(0, 255)) shl 24))
+            shaderMatrix.reset(); shaderMatrix.setScale(rA, rA); shaderMatrix.postTranslate(cx - sep, cy)
+            shA.setLocalMatrix(shaderMatrix)
+            orbPaint.shader = shA
             canvas.drawCircle(cx - sep, cy, rA, orbPaint)
 
-            orbPaint.shader = RadialGradient(
-                cx + sep, cy, rB,
-                intArrayOf(
-                    (0x00818CF8) or (((masterAlpha * (0.38f + 0.25f * turnB)).toInt()) shl 24),
-                    (0x00818CF8) or (((masterAlpha * 0.10f).toInt()) shl 24),
-                    Color.TRANSPARENT
-                ),
-                null, Shader.TileMode.CLAMP
-            )
+            val shB = getCachedSoftRadialShader((0x00818CF8) or (((masterAlpha * (0.38f + 0.25f * turnB)).toInt().coerceIn(0, 255)) shl 24))
+            shaderMatrix.reset(); shaderMatrix.setScale(rB, rB); shaderMatrix.postTranslate(cx + sep, cy)
+            shB.setLocalMatrix(shaderMatrix)
+            orbPaint.shader = shB
             canvas.drawCircle(cx + sep, cy, rB, orbPaint)
             orbPaint.shader = null
 
@@ -1404,10 +1368,7 @@ class BeatWallService : WallpaperService() {
                 val auraRy = width * 0.16f * auraBreath
                 val auraAlpha = (masterAlpha * (if (isFocusMode) 0.16f else 0.30f) * eqAmp).toInt().coerceIn(0, 255)
                 val auraCol = (accent and 0x00FFFFFF) or (auraAlpha shl 24)
-                val auraSh = if (cachedSoftMistColor == auraCol && cachedSoftMistShader != null) cachedSoftMistShader!! else {
-                    RadialGradient(0f, 0f, 1f, intArrayOf(auraCol, (accent and 0x00FFFFFF) or (((auraAlpha * 0.35f).toInt()) shl 24), Color.TRANSPARENT), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
-                        .also { cachedSoftMistColor = auraCol; cachedSoftMistShader = it }
-                }
+                val auraSh = getCachedSoftRadialShader(auraCol)
                 shaderMatrix.reset(); shaderMatrix.setScale(auraRx, auraRy); shaderMatrix.postTranslate(cx, cy)
                 auraSh.setLocalMatrix(shaderMatrix)
                 orbPaint.shader = auraSh
