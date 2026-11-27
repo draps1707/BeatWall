@@ -996,7 +996,7 @@ class BeatWallService : WallpaperService() {
                 // Gentle readability scrim so bright silver/peach covers never wash out 2-shade lyrics
                 orbPaint.shader = null
                 orbPaint.color = 0xFF05070D.toInt()
-                orbPaint.alpha = (masterAlpha * 0.26f).toInt().coerceIn(0, 255)
+                orbPaint.alpha = (masterAlpha * 0.30f).toInt().coerceIn(0, 255)
                 canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), orbPaint)
             }
 
@@ -1865,9 +1865,7 @@ class BeatWallService : WallpaperService() {
 
                     // Strictly 2 clean states: Shade 1 (white-mixed pastel) -> Shade 2 (full vibrant proper color)
                     val sungTint = sungRgb or (lineAlpha shl 24)
-                    val unsungTint = unsungRgb or (((lineAlpha * 0.64f).toInt().coerceIn(0, 255)) shl 24)
-                    val shadowAlpha = (lineAlpha * 0.42f).toInt().coerceIn(0, 120)
-                    layout.paint.setShadowLayer(density * 3.0f, 0f, density * 1.0f, (shadowAlpha shl 24))
+                    val unsungTint = unsungRgb or (((lineAlpha * 0.66f).toInt().coerceIn(0, 255)) shl 24)
 
                     if (totalSweepFrac <= 0.005f || lineAlpha < 20) {
                         layout.paint.shader = null
@@ -1926,7 +1924,6 @@ class BeatWallService : WallpaperService() {
                         }
                         layout.paint.shader = null
                     }
-                    layout.paint.clearShadowLayer()
                 }
 
                 canvas.restore()
