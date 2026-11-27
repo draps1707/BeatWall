@@ -30,6 +30,7 @@ import android.text.TextUtils
 import android.view.Choreographer
 import android.view.Surface
 import android.view.SurfaceHolder
+import android.view.WindowManager
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
 import java.util.Calendar
@@ -125,7 +126,20 @@ class BeatWallService : WallpaperService() {
         private var lastFrameNanos = 0L
         private var lastDrawNanos = 0L
         private var currentRequestedHz = -1f
+        private var cachedPreferredHighFrameRate: Float? = null
         private var frameScheduled = false
+        private var lowRateCallbackPending = false
+        // When the scene is in its low-motion mode, avoid waking the render loop
+        // on every display vsync. A delayed main-thread callback re-enters the
+        // Choreographer at roughly 30 fps; high-motion/music scenes remain vsync-driven.
+        private val lowRateFrameRunnable = Runnable {
+            lowRateCallbackPending = false
+            if (frameScheduled && visible && surfaceReady && powerManager.isInteractive) {
+                choreographer.postFrameCallback(this)
+            } else {
+                frameScheduled = false
+            }
+        }
         private var cachedSkySnapshot: SkySnapshot? = null
         private var lastSkyComputeMs = 0L
 
@@ -384,6 +398,7 @@ class BeatWallService : WallpaperService() {
             super.onSurfaceChanged(holder, format, w, h)
             width = w.coerceAtLeast(1)
             height = h.coerceAtLeast(1)
+            cachedPreferredHighFrameRate = null
             lockLyricsClip.set(0f, height * 0.415f, width.toFloat(), height * 0.73f)
             homeLyricsClip.set(0f, height * 0.21f, width.toFloat(), height * 0.77f)
             headerTitleCacheKey = null
@@ -579,14 +594,37 @@ class BeatWallService : WallpaperService() {
                 activeState?.isPlaying == true
         }
 
+        private fun preferredHighFrameRate(): Float {
+            cachedPreferredHighFrameRate?.let { return it }
+            // Avoid hard-coding 120Hz on devices whose display tops out at 60Hz
+            // or 90Hz. Cache the display-mode query; do not enumerate modes per frame.
+            val rate = try {
+                val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                wm.defaultDisplay.supportedModes.maxOfOrNull { it.refreshRate }?.coerceAtLeast(60f) ?: 60f
+            } catch (_: Exception) {
+                60f
+            }
+            cachedPreferredHighFrameRate = rate
+            return rate
+        }
+
         private fun targetFrameRate(): Float {
             if (!needsAnimation()) return 0f
-            // Keep surface hint locked at 120f while active (doFrame throttles Circadian to 30fps without LTPO renegotiation)
-            return 120f
+            // Request a display rate closer to the actual workload. Calm scenes
+            // draw at ~30fps; transitions and active music use the device's
+            // supported high-refresh mode rather than an assumed 120Hz.
+            return if (isHighRateNeeded()) preferredHighFrameRate() else 30f
         }
 
         private fun scheduleNextFrame() {
             if (!visible || !surfaceReady || !powerManager.isInteractive) return
+            // If a low-rate timer is waiting and the workload becomes active,
+            // cancel the timer and resume on the next display vsync immediately.
+            if (isHighRateNeeded() && lowRateCallbackPending) {
+                mainHandler.removeCallbacks(lowRateFrameRunnable)
+                lowRateCallbackPending = false
+                frameScheduled = false
+            }
             if (!frameScheduled) {
                 frameScheduled = true
                 lastFrameNanos = 0L
@@ -605,10 +643,10 @@ class BeatWallService : WallpaperService() {
         }
 
         private fun stopLoop() {
-            if (frameScheduled) {
-                frameScheduled = false
-                choreographer.removeFrameCallback(this)
-            }
+            frameScheduled = false
+            lowRateCallbackPending = false
+            choreographer.removeFrameCallback(this)
+            mainHandler.removeCallbacks(lowRateFrameRunnable)
         }
 
         private fun setSurfaceFrameRate(hz: Float) {
@@ -729,7 +767,10 @@ class BeatWallService : WallpaperService() {
                 }
 
                 val highRate = isHighRateNeeded()
-                setSurfaceFrameRate(120f)
+                // Keep the surface hint aligned with the render cadence. This
+                // avoids requesting a high refresh rate while the low-motion loop
+                // is drawing only about 30 frames per second.
+                setSurfaceFrameRate(if (highRate) preferredHighFrameRate() else 30f)
                 if (highRate || (frameTimeNanos - lastDrawNanos) >= 31_000_000L) {
                     lastDrawNanos = frameTimeNanos
                     drawFrame(frameTimeNanos)
@@ -737,7 +778,15 @@ class BeatWallService : WallpaperService() {
 
                 if (needsAnimation()) {
                     frameScheduled = true
-                    choreographer.postFrameCallback(this)
+                    if (highRate) {
+                        choreographer.postFrameCallback(this)
+                    } else {
+                        // The low-motion scene previously ran doFrame at display
+                        // refresh (often 90/120 Hz) while drawing only ~32 fps.
+                        // Throttle the whole update loop, not just Canvas draws.
+                        lowRateCallbackPending = true
+                        mainHandler.postDelayed(lowRateFrameRunnable, 31L)
+                    }
                 }
             } catch (_: Throwable) {
             }
