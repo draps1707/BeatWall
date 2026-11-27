@@ -15,7 +15,8 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
-import android.widget.SeekBar
+import android.app.TimePickerDialog
+import androidx.appcompat.app.AlertDialog
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -38,7 +39,8 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
     private lateinit var txtLocationCity: TextView
     private lateinit var txtSkyMetrics: TextView
     private lateinit var edtCityInput: EditText
-    private lateinit var seekTimeTravel: SeekBar
+    private lateinit var btnPickTime: Button
+    private lateinit var btnWorldDropdown: Button
     private lateinit var btnSetWallpaper: Button
 
     private val locationPermLauncher = registerForActivityResult(
@@ -65,7 +67,8 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
         txtLocationCity = findViewById(R.id.txtLocationCity)
         txtSkyMetrics = findViewById(R.id.txtSkyMetrics)
         edtCityInput = findViewById(R.id.edtCityInput)
-        seekTimeTravel = findViewById(R.id.seekTimeTravel)
+        btnPickTime = findViewById(R.id.btnPickTime)
+        btnWorldDropdown = findViewById(R.id.btnWorldDropdown)
         btnSetWallpaper = findViewById(R.id.btnSetWallpaper)
 
         findViewById<Button>(R.id.btnNotifAccess).setOnClickListener {
@@ -92,54 +95,43 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
             }
         }
 
-        seekTimeTravel.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (fromUser) {
-                    LocationStore.setPreviewMinute(this@MainActivity, progress)
-                    refreshSkyCard()
-                }
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
+        btnPickTime.setOnClickListener {
+            val prevMin = LocationStore.getPreviewMinute(this)
+            val cal = Calendar.getInstance()
+            val initHour = if (prevMin >= 0) prevMin / 60 else cal.get(Calendar.HOUR_OF_DAY)
+            val initMin = if (prevMin >= 0) prevMin % 60 else cal.get(Calendar.MINUTE)
+            TimePickerDialog(this, { _, hourOfDay, minute ->
+                LocationStore.setPreviewMinute(this, hourOfDay * 60 + minute)
+                updatePreviewButtons()
+                refreshSkyCard()
+            }, initHour, initMin, false).show()
+        }
 
         findViewById<Button>(R.id.btnPrevLive).setOnClickListener {
             LocationStore.setPreviewMinute(this, -1)
-        LocationStore.setPreviewDayOfYear(this, -1)
-            val cal = Calendar.getInstance()
-            seekTimeTravel.progress = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+            LocationStore.setPreviewDayOfYear(this, -1)
+            updatePreviewButtons()
             refreshSkyCard()
             Toast.makeText(this, "Live sky restored", Toast.LENGTH_SHORT).show()
         }
 
-        val worldMap = mapOf(
-            R.id.btnWorldToday to (-1 to "Today's live world"),
-            R.id.btnWorldForest to (1 to "Firewatch Lookout preview"),
-            R.id.btnWorldDunes to (2 to "Sand Dunes preview"),
-            R.id.btnWorldSnow to (3 to "Snowy Peaks & Lake preview"),
-            R.id.btnWorldMesa to (4 to "Emerald Savanna preview"),
-            R.id.btnWorldOcean to (5 to "Coastal Ocean preview"),
-            R.id.btnWorldWoodland to (6 to "Sunlit Woodland preview"),
-            R.id.btnWorldReeds to (7 to "Coastal Reeds preview"),
-            R.id.btnWorldCove to (8 to "Crystal Cove preview"),
-            R.id.btnWorldTorii to (9 to "Kyoto Torii Lake preview"),
-            R.id.btnWorldLighthouse to (10 to "Lighthouse Cliff preview"),
-            R.id.btnWorldFjord to (11 to "Nordic Aurora Fjord preview"),
-            R.id.btnWorldStag to (12 to "Valley Lake & Stag preview"),
-            R.id.btnWorldCappadocia to (13 to "Cappadocia Balloons preview"),
-            R.id.btnWorldOdisha to (14 to "Odisha Banyan Ghat preview"),
-            R.id.btnWorldHimalaya to (15 to "Himalayan Monastery preview"),
-            R.id.btnWorldViaduct to (16 to "Alpine Viaduct preview"),
-            R.id.btnWorldWindmill to (17 to "Canyon & Windmill preview"),
-            R.id.btnWorldBamboo to (18 to "Misty Bamboo preview"),
-            R.id.btnWorldVolcano to (19 to "Volcanic Caldera preview"),
-            R.id.btnWorldHighland to (20 to "Highland Loch preview")
-        )
-        for ((btnId, pair) in worldMap) {
-            findViewById<Button>(btnId).setOnClickListener {
-                LocationStore.setPreviewDayOfYear(this, pair.first)
-                Toast.makeText(this, pair.second, Toast.LENGTH_SHORT).show()
+        btnWorldDropdown.setOnClickListener {
+            val biomes = WorldBiome.values()
+            val labels = Array(biomes.size + 1) { i ->
+                if (i == 0) "Today (Live Daily Rotation)" else "${i}. ${biomes[i - 1].title}"
             }
+            val savedDay = LocationStore.getPreviewDayOfYear(this)
+            val checked = if (savedDay in 1..biomes.size) savedDay else 0
+            AlertDialog.Builder(this)
+                .setTitle("Select World Biome")
+                .setSingleChoiceItems(labels, checked) { dialog, which ->
+                    val dayVal = if (which == 0) -1 else which
+                    LocationStore.setPreviewDayOfYear(this, dayVal)
+                    updatePreviewButtons()
+                    dialog.dismiss()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
         }
 
         btnSetWallpaper.setOnClickListener {
@@ -156,13 +148,7 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
     override fun onResume() {
         super.onResume()
         MediaSessionTracker.getInstance(applicationContext).addListener(this)
-        val prevMin = LocationStore.getPreviewMinute(this)
-        if (prevMin >= 0) {
-            seekTimeTravel.progress = prevMin
-        } else {
-            val cal = Calendar.getInstance()
-            seekTimeTravel.progress = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
-        }
+        updatePreviewButtons()
         refreshUi()
         refreshSkyCard()
     }
@@ -195,6 +181,30 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
         btnSetWallpaper.alpha = if (isActiveWall) 0.85f else 1.0f
 
         cardNowPlaying.visibility = if (notifOk && battOk) View.VISIBLE else View.GONE
+    }
+
+    private fun updatePreviewButtons() {
+        val prevMin = LocationStore.getPreviewMinute(this)
+        btnPickTime.text = if (prevMin >= 0) {
+            val h24 = prevMin / 60
+            val m = prevMin % 60
+            val amPm = if (h24 >= 12) "PM" else "AM"
+            val h12 = when {
+                h24 == 0 -> 12
+                h24 > 12 -> h24 - 12
+                else -> h24
+            }
+            String.format(Locale.getDefault(), "Preview: %d:%02d %s ▾", h12, m, amPm)
+        } else {
+            "Time: Live ▾"
+        }
+        val biomes = WorldBiome.values()
+        val savedDay = LocationStore.getPreviewDayOfYear(this)
+        btnWorldDropdown.text = if (savedDay in 1..biomes.size) {
+            "World: ${savedDay}. ${biomes[savedDay - 1].title} ▾"
+        } else {
+            "World: Today (Live) ▾"
+        }
     }
 
     private fun refreshSkyCard() {

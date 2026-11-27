@@ -584,13 +584,9 @@ class BeatWallService : WallpaperService() {
         }
 
         private fun isHighRateNeeded(): Boolean {
-            val targetLock = if (keyguardManager.isKeyguardLocked) 1f else 0f
-            return abs(targetLock - lockBlend) > 0.005f || abs(lockVel) > 0.01f ||
-                isCrossfading ||
-                abs(targetLyricsAlpha - lyricsAlpha) > 0.005f || abs(lyricsAlphaVel) > 0.01f ||
-                abs(targetEqAmp - eqAmp) > 0.005f || abs(eqVel) > 0.01f ||
-                proceduralAnimator.isCoasting() || studioOmega > 0.002 ||
-                activeState?.isPlaying == true
+            // Keep smooth 120Hz rendering whenever visible and not in low-battery mode;
+            // still drops to 0fps when hidden via onVisibilityChanged(false).
+            return !isLowBattery
         }
 
         private fun preferredHighFrameRate(): Float {
@@ -838,7 +834,12 @@ class BeatWallService : WallpaperService() {
                     lastEnvCacheMs = nowMs
                     cachedDay = currentDayOfMonth()
                     val prevDoy = LocationStore.getPreviewDayOfYear(applicationContext)
-                    cachedDayOfYear = if (prevDoy in 1..366) prevDoy else Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+                    cachedDayOfYear = if (prevDoy in 1..366) {
+                        prevDoy
+                    } else {
+                        val cal = Calendar.getInstance()
+                        landscapeEngine.shuffledLiveBiomeDay(cal.get(Calendar.YEAR), cal.get(Calendar.DAY_OF_YEAR))
+                    }
                     val (_, effMin) = effectiveTimeMillisAndMinute()
                     cachedMin = effMin
                     cachedLoc = LocationStore.load(applicationContext)

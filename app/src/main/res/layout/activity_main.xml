@@ -254,7 +254,7 @@
                         android:text="Set" />
                 </LinearLayout>
 
-                <!-- 24-Hour Time-Travel Sky Preview Slider -->
+                <!-- Clock-Based Sky Preview Selector -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -262,227 +262,38 @@
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
 
-                    <SeekBar
-                        android:id="@+id/seekTimeTravel"
+                    <Button
+                        android:id="@+id/btnPickTime"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
                         android:layout_width="0dp"
-                        android:layout_height="wrap_content"
+                        android:layout_height="40dp"
                         android:layout_weight="1"
-                        android:max="1439"
-                        android:progress="720" />
+                        android:text="Time: Live ▾"
+                        android:textColor="#F8FAFC"
+                        android:textSize="12sp" />
 
                     <Button
                         android:id="@+id/btnPrevLive"
                         style="@style/Widget.Material3.Button.TonalButton"
                         android:layout_width="wrap_content"
-                        android:layout_height="36dp"
+                        android:layout_height="40dp"
                         android:layout_marginStart="8dp"
                         android:minWidth="0dp"
-                        android:paddingHorizontal="12dp"
+                        android:paddingHorizontal="14dp"
                         android:text="Live"
-                        android:textSize="11sp" />
+                        android:textSize="12sp" />
                 </LinearLayout>
 
-                <!-- 20-World Firewatch Quick Preview Selector -->
-                <HorizontalScrollView
+                <!-- Dynamic Biome Dropdown Selector -->
+                <Button
+                    android:id="@+id/btnWorldDropdown"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
+                    android:layout_height="42dp"
                     android:layout_marginTop="8dp"
-                    android:scrollbars="none">
-
-                    <LinearLayout
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal">
-
-                        <Button
-                            android:id="@+id/btnWorldToday"
-                            style="@style/Widget.Material3.Button.TonalButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:text="Today"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldForest"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Firewatch"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldDunes"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Dunes"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldSnow"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Snowy Lake"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldMesa"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Savanna"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldOcean"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Ocean"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldWoodland"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Woodland"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldReeds"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Reeds"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldCove"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Cove"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldTorii"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Torii Lake"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldLighthouse"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Lighthouse"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldFjord"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Aurora Fjord"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldStag"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Valley Stag"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldCappadocia"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Cappadocia"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldOdisha"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Odisha Ghat"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldHimalaya"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Himalaya"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldViaduct"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Viaduct"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldWindmill"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Windmill"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldBamboo"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Bamboo"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldVolcano"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Volcano"
-                            android:textSize="11sp" />
-
-                        <Button
-                            android:id="@+id/btnWorldHighland"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="34dp"
-                            android:layout_marginStart="6dp"
-                            android:text="Highland"
-                            android:textSize="11sp" />
-                    </LinearLayout>
-                </HorizontalScrollView>
+                    android:text="World: Today (Live) ▾"
+                    android:textColor="#F8FAFC"
+                    android:textSize="12sp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
