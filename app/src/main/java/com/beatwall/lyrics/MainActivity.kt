@@ -41,6 +41,8 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
     private lateinit var edtCityInput: EditText
     private lateinit var btnPickTime: Button
     private lateinit var btnWorldDropdown: Button
+    private lateinit var txtAlmanacHeader: TextView
+    private lateinit var txtAlmanacBody: TextView
     private lateinit var btnSetWallpaper: Button
 
     private val locationPermLauncher = registerForActivityResult(
@@ -69,6 +71,13 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
         edtCityInput = findViewById(R.id.edtCityInput)
         btnPickTime = findViewById(R.id.btnPickTime)
         btnWorldDropdown = findViewById(R.id.btnWorldDropdown)
+        txtAlmanacHeader = findViewById(R.id.txtAlmanacHeader)
+        txtAlmanacBody = findViewById(R.id.txtAlmanacBody)
+        findViewById<View>(R.id.cardAlmanac).setOnClickListener {
+            val open = txtAlmanacBody.visibility == View.VISIBLE
+            txtAlmanacBody.visibility = if (open) View.GONE else View.VISIBLE
+            txtAlmanacHeader.text = if (open) "Today's Sky & Odia Panchangam ▾" else "Today's Sky & Odia Panchangam ▴"
+        }
         btnSetWallpaper = findViewById(R.id.btnSetWallpaper)
 
         findViewById<Button>(R.id.btnNotifAccess).setOnClickListener {
@@ -232,6 +241,25 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
         val sunAlt = snap.sunAltDeg.roundToInt()
         val wTag = weather.sky.name.lowercase().replaceFirstChar { it.uppercase() }
         txtSkyMetrics.text = "$wTag (${weather.windKmh.roundToInt()} km/h) • Sun $sunAlt° • Rise $rise • Set $set • Moon $moonPct%"
+
+        val alm = SkyAstronomy.computeAlmanac(targetMs, loc.lat, loc.lon)
+        txtAlmanacBody.text = buildString {
+            append("SUN & TWILIGHT\n")
+            append("• Sunrise ${alm.sunrise}  •  Solar Noon ${alm.solarNoon}  •  Sunset ${alm.sunset}\n")
+            append("• Daylight ${alm.dayLength} (${alm.dinamanaGhati})  •  Max Elev ${alm.maxSunAltDeg.roundToInt()}°\n")
+            append("• Golden Hour: ${alm.sunrise}–${alm.goldenMorningEnd} & ${alm.goldenEveningStart}–${alm.sunset}\n")
+            append("• Twilight: Civil ${alm.civilDawn} / ${alm.civilDusk}  •  Astro ${alm.astroDawn} / ${alm.astroDusk}\n\n")
+            append("MOON & LIBRATION\n")
+            append("• ${alm.moonPhaseName} (${alm.moonIllumPct}%)  •  Dist ${alm.moonDistKm} km\n")
+            append("• Libration: Lon ${"%.1f".format(alm.librationLonDeg)}°, Lat ${"%.1f".format(alm.librationLatDeg)}°\n\n")
+            append("ODIA PANCHANGAM & NITYA KARMA\n")
+            append("• Tithi: ${alm.tithiName}  •  Nakshatra: ${alm.nakshatraName}\n")
+            append("• Yoga: ${alm.yogaName}  •  Karana: ${alm.karanaName}\n")
+            append("• Rashi: Sun ${alm.sunRashi}  •  Moon ${alm.moonRashi}\n")
+            append("• Brahma Muhurta: ${alm.brahmaMuhurta}  •  Abhijit: ${alm.abhijitMuhurta}\n")
+            append("• Sandhya: Pratah ${alm.pratahSandhya} • Madhyahna ${alm.madhyahnaSandhya} • Sayam ${alm.sayamSandhya}\n")
+            append("• Rahu ${alm.rahuKalam}  •  Yama ${alm.yamaganda}  •  Gulika ${alm.gulikaKalam}")
+        }
     }
 
     @Suppress("MissingPermission")

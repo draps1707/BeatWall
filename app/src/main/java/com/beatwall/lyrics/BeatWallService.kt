@@ -1068,9 +1068,10 @@ class BeatWallService : WallpaperService() {
         }
 
         private fun projectAzimuthToX(azDeg: Float): Float {
-            // Panoramic East (60°) -> South (180°) -> West (300°) sky window across screen width
-            val rel = (((azDeg - 60f) % 360f + 360f) % 360f)
-            val frac = (rel / 240f).coerceIn(0.06f, 0.94f)
+            // Panoramic East (60°) -> South (180°) -> West (300°) sky window centered on South (180°)
+            // Signed offset prevents NE rises (<60°) from wrapping around to the West/right edge.
+            var signedFromSouth = ((azDeg - 180f) % 360f + 540f) % 360f - 180f
+            val frac = ((signedFromSouth + 120f) / 240f).coerceIn(0.06f, 0.94f)
             return width * (0.08f + 0.84f * frac)
         }
 
@@ -1205,7 +1206,7 @@ class BeatWallService : WallpaperService() {
 
                 canvas.save()
                 canvas.translate(moonX, moonY)
-                canvas.rotate(sky.moonLimbTiltDeg)
+                canvas.rotate(-sky.moonLimbTiltDeg - 90f)
 
                 if (!isDay) {
                     orbPaint.color = sky.moonColor

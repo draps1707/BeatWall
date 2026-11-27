@@ -150,20 +150,33 @@ object SkyAstronomy {
             (sin(latRad) * sin(deltaSunRad) + cos(latRad) * cos(deltaSunRad) * cos(hSunRad))
                 .coerceIn(-1.0, 1.0)
         )
-        val sunAltDeg = (sunAltRad * RAD2DEG).toFloat()
+        val sunGeoDeg = sunAltRad * RAD2DEG
+        val sunAltDeg = (sunGeoDeg + atmosphericRefractionDeg(sunGeoDeg)).toFloat()
         val sunAzDeg = normDeg(
             atan2(sin(hSunRad), cos(hSunRad) * sin(latRad) - tan(deltaSunRad) * cos(latRad)) * RAD2DEG + 180.0
         ).toFloat()
 
         // 2. Moon
-        val moonL = normDeg(218.316 + 13.176396 * d)
-        val moonM = normDeg(134.963 + 13.064993 * d)
-        val moonF = normDeg(93.272 + 13.229350 * d)
+        val moonL = normDeg(218.3164477 + 13.17639648 * d)
+        val moonD = normDeg(297.8501921 + 12.19074912 * d)
+        val moonM = normDeg(134.9633964 + 13.06499295 * d)
+        val moonF = normDeg(93.2720950 + 13.22935024 * d)
 
+        val moonDRad = moonD * DEG2RAD
         val moonMRad = moonM * DEG2RAD
         val moonFRad = moonF * DEG2RAD
-        val lambdaMoonDeg = normDeg(moonL + 6.289 * sin(moonMRad))
-        val betaMoonDeg = 5.128 * sin(moonFRad)
+        // Primary Meeus periodic terms: Principal, Evection (2D-M'), Variation (2D), Annual (-M)
+        val lambdaMoonDeg = normDeg(
+            moonL +
+                6.289 * sin(moonMRad) +
+                1.274 * sin(2.0 * moonDRad - moonMRad) +
+                0.658 * sin(2.0 * moonDRad) +
+                0.214 * sin(2.0 * moonMRad) -
+                0.186 * sin(sunGRad)
+        )
+        val betaMoonDeg = 5.128 * sin(moonFRad) +
+            0.280 * sin(moonMRad + moonFRad) -
+            0.277 * sin(moonMRad - moonFRad)
 
         val lambdaMoonRad = lambdaMoonDeg * DEG2RAD
         val betaMoonRad = betaMoonDeg * DEG2RAD
@@ -184,13 +197,17 @@ object SkyAstronomy {
                 .coerceIn(-1.0, 1.0)
         )
         val moonGeoAltDeg = moonGeoAltRad * RAD2DEG
-        val moonAltDeg = (moonGeoAltDeg - 0.95 * cos(moonGeoAltRad)).toFloat()
+        val moonTopocentricDeg = moonGeoAltDeg - 0.95 * cos(moonGeoAltRad)
+        val moonAltDeg = (moonTopocentricDeg + atmosphericRefractionDeg(moonTopocentricDeg)).toFloat()
         val moonAzDeg = normDeg(
             atan2(sin(hMoonRad), cos(hMoonRad) * sin(latRad) - tan(deltaMoonRad) * cos(latRad)) * RAD2DEG + 180.0
         ).toFloat()
 
         // 3. Exact Moon Phase, Size, Bright-Limb Tilt & Eclipse Check
-        val cosPsi = (cos(betaMoonRad) * cos((lambdaMoonDeg - sunL) * DEG2RAD)).coerceIn(-1.0, 1.0)
+        val cosPsi = (
+            sin(deltaSunRad) * sin(deltaMoonRad) +
+                cos(deltaSunRad) * cos(deltaMoonRad) * cos(alphaSunRad - alphaMoonRad)
+            ).coerceIn(-1.0, 1.0)
         val psiDeg = acos(cosPsi) * RAD2DEG
         val illum = ((1.0 - cosPsi) * 0.5).toFloat().coerceIn(0f, 1f)
         val isWaxing = normDeg(lambdaMoonDeg - lambdaSunDeg) < 180.0
@@ -453,5 +470,210 @@ object SkyAstronomy {
             else -> hr24
         }
         return "%d:%02d %s".format(hr12, min, amPm)
+    }
+
+    private fun atmosphericRefractionDeg(altDeg: Double): Double {
+        if (altDeg < -2.0 || altDeg > 85.0) return 0.0
+        val arg = (altDeg + 10.3 / (altDeg + 5.11)) * DEG2RAD
+        val arcmin = 1.02 / tan(arg).coerceAtLeast(0.01)
+        return (arcmin / 60.0).coerceIn(0.0, 0.75)
+    }
+
+    data class SkyAlmanac(
+        val sunrise: String,
+        val sunset: String,
+        val solarNoon: String,
+        val dayLength: String,
+        val maxSunAltDeg: Float,
+        val goldenMorningEnd: String,
+        val goldenEveningStart: String,
+        val civilDawn: String,
+        val civilDusk: String,
+        val astroDawn: String,
+        val astroDusk: String,
+        val moonPhaseName: String,
+        val moonIllumPct: Int,
+        val moonDistKm: Int,
+        val librationLonDeg: Float,
+        val librationLatDeg: Float,
+        val tithiName: String,
+        val nakshatraName: String,
+        val yogaName: String,
+        val karanaName: String,
+        val sunRashi: String,
+        val moonRashi: String,
+        val brahmaMuhurta: String,
+        val pratahSandhya: String,
+        val madhyahnaSandhya: String,
+        val sayamSandhya: String,
+        val abhijitMuhurta: String,
+        val rahuKalam: String,
+        val yamaganda: String,
+        val gulikaKalam: String,
+        val dinamanaGhati: String
+    )
+
+    private val TITHI_NAMES = arrayOf(
+        "Pratipada", "Dwitiya", "Tritiya", "Chaturthi", "Panchami",
+        "Shashthi", "Saptami", "Ashtami", "Navami", "Dashami",
+        "Ekadashi", "Dwadashi", "Trayodashi", "Chaturdashi", "Purnima",
+        "Pratipada", "Dwitiya", "Tritiya", "Chaturthi", "Panchami",
+        "Shashthi", "Saptami", "Ashtami", "Navami", "Dashami",
+        "Ekadashi", "Dwadashi", "Trayodashi", "Chaturdashi", "Amavasya"
+    )
+    private val NAKSHATRA_NAMES = arrayOf(
+        "Ashwini", "Bharani", "Krittika", "Rohini", "Mrigashira", "Ardra",
+        "Punarvasu", "Pushya", "Ashlesha", "Magha", "Purva Phalguni", "Uttara Phalguni",
+        "Hasta", "Chitra", "Swati", "Vishakha", "Anuradha", "Jyeshtha",
+        "Mula", "Purva Ashadha", "Uttara Ashadha", "Shravana", "Dhanishta", "Shatabhisha",
+        "Purva Bhadrapada", "Uttara Bhadrapada", "Revati"
+    )
+    private val YOGA_NAMES = arrayOf(
+        "Vishkambha", "Priti", "Ayushman", "Saubhagya", "Shobhana", "Atiganda",
+        "Sukarma", "Dhriti", "Shula", "Ganda", "Vriddhi", "Dhruva",
+        "Vyaghata", "Harshana", "Vajra", "Siddhi", "Vyatipata", "Variyana",
+        "Parigha", "Shiva", "Siddha", "Sadhya", "Shubha", "Shukla",
+        "Brahma", "Indra", "Vaidhriti"
+    )
+    private val KARANA_NAMES = arrayOf(
+        "Bava", "Balava", "Kaulava", "Taitila", "Garaja", "Vanija", "Vishti"
+    )
+    private val RASHI_NAMES = arrayOf(
+        "Mesha", "Vrishabha", "Mithuna", "Karka", "Simha", "Kanya",
+        "Tula", "Vrischika", "Dhanu", "Makara", "Kumbha", "Meena"
+    )
+
+    fun computeAlmanac(utcMillis: Long, latDeg: Double, lonDeg: Double): SkyAlmanac {
+        val jd = utcMillis / 86_400_000.0 + 2440587.5
+        val d = jd - 2451545.0
+        val T = d / 36525.0
+        val latRad = latDeg * DEG2RAD
+
+        val sunL = normDeg(280.46646 + 36000.76983 * T)
+        val sunG = normDeg(357.52911 + 35999.05029 * T)
+        val sunGRad = sunG * DEG2RAD
+        val lambdaSunDeg = normDeg(sunL + 1.914602 * sin(sunGRad) + 0.019993 * sin(2.0 * sunGRad))
+        val epsRad = (23.439291 - 0.0130042 * T) * DEG2RAD
+        val lambdaSunRad = lambdaSunDeg * DEG2RAD
+        val alphaSunDeg = normDeg(atan2(cos(epsRad) * sin(lambdaSunRad), cos(lambdaSunRad)) * RAD2DEG)
+        val deltaSunRad = asin((sin(epsRad) * sin(lambdaSunRad)).coerceIn(-1.0, 1.0))
+
+        val eotMin = 4.0 * normSignedDeg(sunL - alphaSunDeg)
+        val tzHours = TimeZone.getDefault().getOffset(utcMillis) / 3_600_000.0
+        val solarNoonHours = (((12.0 + tzHours - lonDeg / 15.0 - eotMin / 60.0) % 24.0) + 24.0) % 24.0
+
+        fun eventPair(h0Deg: Double): Pair<Double, Double> {
+            val h0Rad = h0Deg * DEG2RAD
+            val cosH0 = ((sin(h0Rad) - sin(latRad) * sin(deltaSunRad)) / (cos(latRad) * cos(deltaSunRad))).coerceIn(-1.0, 1.0)
+            val spanHours = (acos(cosH0) * RAD2DEG) / 15.0
+            return (solarNoonHours - spanHours) to (solarNoonHours + spanHours)
+        }
+
+        val (sunriseH, sunsetH) = eventPair(-0.8333)
+        val (goldenMornEndH, goldenEveStartH) = eventPair(6.0)
+        val (civilDawnH, civilDuskH) = eventPair(-6.0)
+        val (astroDawnH, astroDuskH) = eventPair(-18.0)
+
+        val dayLenH = (sunsetH - sunriseH).coerceAtLeast(0.0)
+        val dayHInt = dayLenH.toInt()
+        val dayMInt = ((dayLenH - dayHInt) * 60.0).toInt()
+        val maxSunAlt = (90.0 - abs(latDeg - deltaSunRad * RAD2DEG)).toFloat()
+
+        // Moon & Libration
+        val moonL = normDeg(218.3164477 + 13.17639648 * d)
+        val moonD = normDeg(297.8501921 + 12.19074912 * d)
+        val moonM = normDeg(134.9633964 + 13.06499295 * d)
+        val moonF = normDeg(93.2720950 + 13.22935024 * d)
+        val omegaDeg = normDeg(125.04452 - 1934.136261 * T)
+        val moonDRad = moonD * DEG2RAD
+        val moonMRad = moonM * DEG2RAD
+        val moonFRad = moonF * DEG2RAD
+        val lambdaMoonDeg = normDeg(
+            moonL + 6.289 * sin(moonMRad) + 1.274 * sin(2.0 * moonDRad - moonMRad) +
+                0.658 * sin(2.0 * moonDRad) + 0.214 * sin(2.0 * moonMRad) - 0.186 * sin(sunGRad)
+        )
+        val distKm = (385000.56 - 20905.355 * cos(moonMRad) - 3699.111 * cos(2.0 * moonDRad - moonMRad) - 2955.968 * cos(2.0 * moonDRad)).toInt()
+        val elong = normDeg(lambdaMoonDeg - lambdaSunDeg)
+        val illumPct = (((1.0 - cos(elong * DEG2RAD)) * 0.5) * 100.0).toInt().coerceIn(0, 100)
+        val phaseName = when {
+            elong < 12.0 || elong >= 348.0 -> "New Moon"
+            elong < 78.0 -> "Waxing Crescent"
+            elong < 102.0 -> "First Quarter"
+            elong < 168.0 -> "Waxing Gibbous"
+            elong < 192.0 -> "Full Moon"
+            elong < 258.0 -> "Waning Gibbous"
+            elong < 282.0 -> "Third Quarter"
+            else -> "Waning Crescent"
+        }
+        val libLon = normSignedDeg(lambdaMoonDeg - moonF - omegaDeg).coerceIn(-7.9, 7.9).toFloat()
+        val libLat = (-asin((sin((lambdaMoonDeg - omegaDeg) * DEG2RAD) * sin(6.68 * DEG2RAD)).coerceIn(-1.0, 1.0)) * RAD2DEG).toFloat()
+
+        // Odia Panchangam (Lahiri / Chitrapaksha Ayanamsa ~24.22° in 2026)
+        val ayanamsa = 23.853 + 0.013968 * (T * 100.0)
+        val sunSid = normDeg(lambdaSunDeg - ayanamsa)
+        val moonSid = normDeg(lambdaMoonDeg - ayanamsa)
+        val tithiIdx = (normDeg(lambdaMoonDeg - lambdaSunDeg) / 12.0).toInt().coerceIn(0, 29)
+        val paksha = if (tithiIdx < 15) "Shukla" else "Krishna"
+        val tithiLabel = "$paksha ${TITHI_NAMES[tithiIdx]}"
+        val nakIdx = (moonSid / 13.3333333).toInt().coerceIn(0, 26)
+        val yogaIdx = (normDeg(sunSid + moonSid) / 13.3333333).toInt().coerceIn(0, 26)
+        val karanaNum = (normDeg(lambdaMoonDeg - lambdaSunDeg) / 6.0).toInt().coerceIn(0, 59)
+        val karanaName = when (karanaNum) {
+            0 -> "Kimstughna"
+            57 -> "Shakuni"
+            58 -> "Chatushpada"
+            59 -> "Naga"
+            else -> KARANA_NAMES[(karanaNum - 1) % 7]
+        }
+        val sunRashi = RASHI_NAMES[(sunSid / 30.0).toInt().coerceIn(0, 11)]
+        val moonRashi = RASHI_NAMES[(moonSid / 30.0).toInt().coerceIn(0, 11)]
+
+        // Nitya Karma & 8-segment Muhurtas
+        val cal = Calendar.getInstance().apply { timeInMillis = utcMillis }
+        val dow = cal.get(Calendar.DAY_OF_WEEK) // 1=Sun .. 7=Sat
+        val rahuSeg = when (dow) { 1 -> 8; 2 -> 2; 3 -> 7; 4 -> 5; 5 -> 6; 6 -> 4; else -> 3 }
+        val yamaSeg = when (dow) { 1 -> 5; 2 -> 4; 3 -> 3; 4 -> 2; 5 -> 1; 6 -> 7; else -> 6 }
+        val guliSeg = when (dow) { 1 -> 7; 2 -> 6; 3 -> 5; 4 -> 4; 5 -> 3; 6 -> 2; else -> 1 }
+        val segW = dayLenH / 8.0
+        fun segRange(k: Int): String = "${formatDecimalHour(sunriseH + (k - 1) * segW)}–${formatDecimalHour(sunriseH + k * segW)}"
+
+        val ghatis = dayLenH * 2.5
+        val gInt = ghatis.toInt()
+        val pInt = ((ghatis - gInt) * 60.0).toInt()
+        val abhijitHalf = dayLenH / 30.0
+
+        return SkyAlmanac(
+            sunrise = formatDecimalHour(sunriseH),
+            sunset = formatDecimalHour(sunsetH),
+            solarNoon = formatDecimalHour(solarNoonHours),
+            dayLength = "${dayHInt}h ${dayMInt}m",
+            maxSunAltDeg = maxSunAlt,
+            goldenMorningEnd = formatDecimalHour(goldenMornEndH),
+            goldenEveningStart = formatDecimalHour(goldenEveStartH),
+            civilDawn = formatDecimalHour(civilDawnH),
+            civilDusk = formatDecimalHour(civilDuskH),
+            astroDawn = formatDecimalHour(astroDawnH),
+            astroDusk = formatDecimalHour(astroDuskH),
+            moonPhaseName = phaseName,
+            moonIllumPct = illumPct,
+            moonDistKm = distKm,
+            librationLonDeg = libLon,
+            librationLatDeg = libLat,
+            tithiName = tithiLabel,
+            nakshatraName = NAKSHATRA_NAMES[nakIdx],
+            yogaName = YOGA_NAMES[yogaIdx],
+            karanaName = karanaName,
+            sunRashi = sunRashi,
+            moonRashi = moonRashi,
+            brahmaMuhurta = "${formatDecimalHour(sunriseH - 1.6)}–${formatDecimalHour(sunriseH - 0.8)}",
+            pratahSandhya = "${formatDecimalHour(sunriseH - 0.4)}–${formatDecimalHour(sunriseH + 0.4)}",
+            madhyahnaSandhya = "${formatDecimalHour(solarNoonHours - 0.4)}–${formatDecimalHour(solarNoonHours + 0.4)}",
+            sayamSandhya = "${formatDecimalHour(sunsetH - 0.4)}–${formatDecimalHour(sunsetH + 0.4)}",
+            abhijitMuhurta = if (dow == Calendar.WEDNESDAY) "Avoided (Wed)" else "${formatDecimalHour(solarNoonHours - abhijitHalf)}–${formatDecimalHour(solarNoonHours + abhijitHalf)}",
+            rahuKalam = segRange(rahuSeg),
+            yamaganda = segRange(yamaSeg),
+            gulikaKalam = segRange(guliSeg),
+            dinamanaGhati = "${gInt} Gh ${pInt} Pa"
+        )
     }
 }
