@@ -1039,9 +1039,9 @@ class BeatWallService : WallpaperService() {
             val maxWidths = if (isCurrent) lyricMaxLineW else prevLyricMaxLineW
             val stepPx = if (isCurrent) avgLineStep else prevAvgLineStep
             val yScroll = if (isCurrent) springY else prevSpringY
-            val clipTop = height * (0.225f + (0.42f - 0.225f) * lb)
-            val clipBottom = height * (0.805f + (0.74f - 0.805f) * lb)
-            val centerY = height * (0.505f + (0.572f - 0.505f) * lb)
+            val clipTop = height * (0.205f + (0.42f - 0.205f) * lb)
+            val clipBottom = height * (0.825f + (0.74f - 0.825f) * lb)
+            val centerY = height * (0.512f + (0.572f - 0.512f) * lb)
             val centerX = width * 0.06f
 
             if (lyrAlpha > 2 && layouts.isNotEmpty() && centers.isNotEmpty()) {
@@ -1775,8 +1775,8 @@ class BeatWallService : WallpaperService() {
             // Anchor the 9-line (-4..+4) window to visual scrollY so outer lines never pop in/out on timestamp ticks
             var visualCenterIdx = approxIdx
             var bestDist = Float.MAX_VALUE
-            val scanLo = (approxIdx - 5).coerceAtLeast(0)
-            val scanHi = (approxIdx + 5).coerceAtMost(maxIdx)
+            val scanLo = (approxIdx - 6).coerceAtLeast(0)
+            val scanHi = (approxIdx + 6).coerceAtMost(maxIdx)
             for (k in scanLo..scanHi) {
                 val d = abs(yCenters[k] - scrollY)
                 if (d < bestDist) {
@@ -1784,24 +1784,24 @@ class BeatWallService : WallpaperService() {
                     visualCenterIdx = k
                 }
             }
-            val start = (visualCenterIdx - 4).coerceAtLeast(0)
-            val end = (visualCenterIdx + 4).coerceAtMost(maxIdx)
+            val start = (visualCenterIdx - 5).coerceAtLeast(0)
+            val end = (visualCenterIdx + 5).coerceAtMost(maxIdx)
             val clipH = (clipBottom - clipTop).coerceAtLeast(1f)
-            val mistZone = clipH * 0.08f
+            val mistZone = clipH * 0.035f
             val isPlaying = state.isPlaying && !isLowBattery
 
-            // Smoothly bloom all 9 lines on Homescreen and fold cleanly into compact Lockscreen above fingerprint icon
+            // Smoothly fill full corner-to-corner diagonal on Homescreen and fold cleanly above Lockscreen fingerprint
             val safeStep = lineStepPx.coerceAtLeast(1f)
-            val homeStep = (clipH / 8.8f).coerceAtLeast(safeStep * 0.88f)
+            val homeStep = (clipH / 9.2f).coerceAtLeast(safeStep * 0.88f)
             val effectiveStep = homeStep + (safeStep - homeStep) * lockBlend
             val spreadRatio = (effectiveStep / safeStep).coerceIn(0.88f, 1.85f)
 
-            // Strictly 2 shades (Reverse Apple Music Sing):
-            // Shade 1 (Unsung & all outer lines): Soft Translucent White (0xFFFFFF)
-            // Shade 2 (Active sung sweep): Luminous lightened album color (not 100% heavy flat paint)
-            val vibrantColor = ColorUtils.blendARGB(boostLyricAccent(accentColor), Color.WHITE, 0.18f)
-            val sungRgb = vibrantColor and 0x00FFFFFF
-            val unsungRgb = 0x00FFFFFF
+            // Strictly 2 shades (Option 2):
+            // Shade 1 (Unsung & all outer lines): Soft Translucent Album Color (no plain white stealing brightness)
+            // Shade 2 (Active sung sweep): Bright White-Hot Pastel Glow of that same album color
+            val vibrantColor = boostLyricAccent(accentColor)
+            val sungRgb = ColorUtils.blendARGB(vibrantColor, Color.WHITE, 0.65f) and 0x00FFFFFF
+            val unsungRgb = vibrantColor and 0x00FFFFFF
 
             for (i in start..end) {
                 val layout = layouts[i]
@@ -1814,9 +1814,9 @@ class BeatWallService : WallpaperService() {
                 val mistFactor = minOf(topFade, botFade)
                 if (mistFactor <= 0.005f) continue
 
-                // 9-step graceful pyramid: faint yet readable at +/-4 (38% floor) -> brighter toward dead center
+                // Corner-to-corner readable pyramid: softly dimmed at +/-4..5 (48% floor) -> brightest at dead center
                 val stepDist = abs(rawOffset) / safeStep
-                val distFade = (1f / (1f + 0.18f * stepDist * stepDist)).coerceIn(0.38f, 1.0f)
+                val distFade = (1f / (1f + 0.14f * stepDist * stepDist)).coerceIn(0.48f, 1.0f)
                 val pausedScale = if (isPlaying) 1.0f else 0.78f
                 val lineAlpha = (masterAlpha * distFade * mistFactor * pausedScale).toInt().coerceIn(0, 255)
                 if (lineAlpha <= 2) continue
@@ -1864,8 +1864,8 @@ class BeatWallService : WallpaperService() {
 
                     // Strictly 2 clean states: Soft Translucent White -> Luminous Album Color
                     // Already-sung lines smoothly relax back into Soft White as they rise above center (zero 3rd shade)
-                    val sungTint = sungRgb or (((lineAlpha * 0.92f).toInt().coerceIn(0, 255)) shl 24)
-                    val unsungTint = unsungRgb or (((lineAlpha * 0.52f).toInt().coerceIn(0, 255)) shl 24)
+                    val sungTint = sungRgb or (lineAlpha shl 24)
+                    val unsungTint = unsungRgb or (((lineAlpha * 0.54f).toInt().coerceIn(0, 255)) shl 24)
 
                     if (i != approxIdx || totalSweepFrac <= 0.005f || lineAlpha < 20) {
                         layout.paint.shader = null
