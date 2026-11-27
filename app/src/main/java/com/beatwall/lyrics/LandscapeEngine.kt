@@ -1283,6 +1283,27 @@ class LandscapeEngine {
                 canvas.scale(1.028f, 1.028f, width * 0.5f, height * 0.5f)
                 canvas.translate(tiltX * density * 6.0f, 0f)
             }
+            // Daytime sky wildlife across fitting biomes (hidden in rain/storms; behind foreground silhouettes)
+            if ((isDay || alpenglow > 0.1f) && weather.sky != SkyWeather.RAIN && weather.sky != SkyWeather.THUNDERSTORM) {
+                when (biome) {
+                    WorldBiome.HIMALAYAN_MONASTERY,
+                    WorldBiome.ALPINE_VIADUCT -> {
+                        if (isDay) drawThermalEagles(canvas, width, height, density, windDir, timeSec, masterAlpha)
+                    }
+                    WorldBiome.SNOWY_ALPENGLOW_LAKE,
+                    WorldBiome.COASTAL_REEDS,
+                    WorldBiome.KYOTO_TORII,
+                    WorldBiome.VALLEY_STAG,
+                    WorldBiome.CAPPADOCIA_BALLOONS,
+                    WorldBiome.ODISHA_BANYAN_GHAT,
+                    WorldBiome.HIGHLAND_LOCH,
+                    WorldBiome.LAVENDER_PROVENCE,
+                    WorldBiome.SANTORINI_CLIFFSIDE -> {
+                        drawBirds(canvas, width, height, density, windDir, timeSec, masterAlpha)
+                    }
+                    else -> {}
+                }
+            }
             when (biome) {
             WorldBiome.FIREWATCH_LOOKOUT -> {
                 val c1Top = ColorUtils.blendARGB(circ.horizonColor, midTone, 0.35f)
