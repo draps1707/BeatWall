@@ -1373,7 +1373,7 @@ class LandscapeEngine {
                 drawAnimatedGiraffe(canvas, auxX, auxY + midShiftY * 0.85f, height * 0.038f, girCol, masterAlpha, timeSec, 2.3)
 
                 drawGradientLayer(canvas, layerPaths[4], height * 0.70f, height.toFloat(), deepVelvet, 0xFF03040A.toInt(), 0f, foreShiftY, masterAlpha)
-                drawSwayingGrass(canvas, width, height, density, height * 0.87f + foreShiftY, deepVelvet, windDir, steadyWind, timeSec, masterAlpha)
+                drawSwayingGrass(canvas, width, height, density, dayOfYear, height * 0.87f + foreShiftY, deepVelvet, windDir, steadyWind, timeSec, masterAlpha)
                 if (isDay || alpenglow > 0.1f) drawBirds(canvas, width, height, density, windDir, timeSec, masterAlpha)
             }
 
