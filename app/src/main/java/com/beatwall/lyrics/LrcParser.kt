@@ -13,7 +13,7 @@ object LrcParser {
     private const val INTRO_GAP_MS = 3500L
     private const val INTERLUDE_GAP_MS = 10000L
 
-    fun parse(rawLrc: String?): List<LyricLine> {
+    fun parse(rawLrc: String?, durationMs: Long = 0L): List<LyricLine> {
         if (rawLrc.isNullOrBlank()) return emptyList()
 
         val parsed = mutableListOf<LyricLine>()
@@ -51,16 +51,18 @@ object LrcParser {
         if (parsed.isEmpty()) return emptyList()
         parsed.sortBy { it.timeMs }
 
-        // Split ANY instrumental span (intro, explicit LRC blank/symbol line, or long gap)
-        // into lively ~3s diagonal rows so long drops/solos flow continuously instead of freezing!
-        val result = ArrayList<LyricLine>(parsed.size + 24)
+        // Split ANY instrumental span (intro, mid-song drop/solo, explicit LRC blank/symbol line, or long outro)
+        // into lively ~3s diagonal rows so long EDM drops & outros flow continuously instead of freezing!
+        val result = ArrayList<LyricLine>(parsed.size + 32)
+        var coveredUntilMs = -1L
         fun addDiagonalInterludeRows(startMs: Long, endMs: Long) {
             val span = (endMs - startMs).coerceAtLeast(1000L)
-            val rows = ((span + 1400L) / 3000L).toInt().coerceIn(2, 16)
+            val rows = ((span + 1400L) / 3000L).toInt().coerceIn(2, 40)
             val step = span / rows
             for (r in 0 until rows) {
                 result.add(LyricLine(startMs + r * step, "• • •", isInterlude = true))
             }
+            if (endMs > coveredUntilMs) coveredUntilMs = endMs
         }
 
         // Restore intro instrumentals for any song whose first vocal starts after 3.5s
@@ -78,7 +80,8 @@ object LrcParser {
             }
 
             if (curr.isInterlude) {
-                // Expand explicit LRC interlude/blank lines (like 30s EDM drops) across their full span!
+                if (curr.timeMs < coveredUntilMs) continue
+                // Expand explicit LRC interlude/blank lines (mid-song drops AND long outros) across their full span!
                 val nextReal = parsed.drop(i + 1).firstOrNull { !it.isInterlude }
                 if (nextReal != null) {
                     val span = nextReal.timeMs - curr.timeMs
@@ -87,6 +90,8 @@ object LrcParser {
                     } else {
                         result.add(curr)
                     }
+                } else if (durationMs > 0L && durationMs - curr.timeMs >= 5500L) {
+                    addDiagonalInterludeRows(curr.timeMs, durationMs)
                 } else {
                     result.add(curr)
                 }
@@ -101,6 +106,15 @@ object LrcParser {
             }
             result.add(curr)
         }
+
+        // Expand long instrumental outros after the final vocal lyric (e.g., 80s EDM outro with no trailing LRC tag)
+        if (durationMs > 0L && result.isNotEmpty() && !result.last().isInterlude) {
+            val outroStart = result.last().timeMs + 3500L
+            if (durationMs - outroStart >= 5500L) {
+                addDiagonalInterludeRows(outroStart, durationMs)
+            }
+        }
+
         return result
     }
 

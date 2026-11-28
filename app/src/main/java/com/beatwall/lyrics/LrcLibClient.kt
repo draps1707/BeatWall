@@ -33,7 +33,7 @@ class LrcLibClient(context: Context) {
         if (cachedFile.exists()) {
             cachedFile.setLastModified(System.currentTimeMillis())
             val raw = cachedFile.readText()
-            val parsed = if (raw == NO_LYRICS_MARKER) emptyList() else LrcParser.parse(raw)
+            val parsed = if (raw == NO_LYRICS_MARKER) emptyList() else LrcParser.parse(raw, durationMs)
             memCache.put(cacheKey, parsed)
             return@withContext parsed
         }
@@ -88,7 +88,7 @@ class LrcLibClient(context: Context) {
             emptyList()
         } else {
             cachedFile.writeText(syncedLrc)
-            val parsed = LrcParser.parse(syncedLrc)
+            val parsed = LrcParser.parse(syncedLrc, durationMs)
             memCache.put(cacheKey, parsed)
             parsed
         }
