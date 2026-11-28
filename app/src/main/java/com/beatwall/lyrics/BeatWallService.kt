@@ -113,7 +113,7 @@ class BeatWallService : WallpaperService() {
         private val sweepShaderKeys = LongArray(16) { Long.MIN_VALUE }
         private val sweepShaders = arrayOfNulls<LinearGradient>(16)
         private var sweepShaderCursor = 0
-        private val interludeNotes = arrayOf("♪", "♫", "♪", "♬")
+        private val interludeNotes = arrayOf("♪", "♫", "♩", "♬", "♪", "♫", "♩", "♬")
         private val lyricHslBuf = FloatArray(3)
 
         private fun getCachedSweepShader(sungCol: Int, unsungCol: Int): LinearGradient {
@@ -1840,17 +1840,42 @@ class BeatWallService : WallpaperService() {
                 canvas.scale(scale, scale, layout.width / 2f, layout.height / 2f)
 
                 if (state.lyrics[i].isInterlude) {
-                    val noteGap = width * 0.044f
+                    // Design A: Wide 8-note 4-part progressive phrase (Q1 0-25% -> Q2 25-50% -> Q3 50-75% -> Q4 75-100%)
+                    val lineStart = state.lyrics[i].timeMs
+                    val nextStart = if (i + 1 < state.lyrics.size) state.lyrics[i + 1].timeMs else lineStart + 10_000L
+                    val lineDur = (nextStart - lineStart).coerceAtLeast(1000L)
+                    val interludeProg = when {
+                        i < approxIdx -> 1.0f
+                        i == approxIdx -> ((posMs - lineStart).toFloat() / lineDur).coerceIn(0f, 1f)
+                        else -> 0.0f
+                    }
+                    val activeQuarter = if (i == approxIdx) (interludeProg * 4f).toInt().coerceIn(0, 3) else -1
+                    val litQuarters = if (i == approxIdx) activeQuarter + 1 else 0
+
+                    val sungTint = sungRgb or (lineAlpha shl 24)
+                    val unsungTint = unsungRgb or (((lineAlpha * 0.74f).toInt().coerceIn(0, 255)) shl 24)
                     val baseX = layout.width / 2f
-                    val noteY = layout.height / 2f + width * 0.012f
-                    instNotePaint.textSize = width * 0.048f
-                    instNotePaint.color = vibrantColor
-                    for (n in 0 until 4) {
-                        val nPhase = studioPhase * 3.8 - n * 0.85
-                        val breath = 0.50f + 0.50f * ((sin(nPhase) + 1.0) * 0.5).toFloat()
-                        val bounce = -kotlin.math.abs(sin(nPhase)).toFloat() * (width * 0.014f) * eqAmp
-                        instNotePaint.alpha = (lineAlpha * (0.38f + 0.62f * breath * eqAmp)).toInt().coerceIn(20, 255)
-                        canvas.drawText(interludeNotes[n], baseX + (n - 1.5f) * noteGap, noteY + bounce, instNotePaint)
+                    val noteY = layout.height / 2f + width * 0.014f
+                    val pairSpan = width * 0.175f
+                    val intraGap = width * 0.052f
+
+                    for (n in 0 until 8) {
+                        val quarter = n / 2 // 0..3
+                        val inPair = if (n % 2 == 0) -0.5f else 0.5f
+                        val nx = baseX + (quarter - 1.5f) * pairSpan + inPair * intraGap
+                        val isLit = quarter < litQuarters
+                        val isCurrentQ = quarter == activeQuarter
+                        val nPhase = studioPhase * 3.6 - n * 0.65
+                        val bounce = if (isCurrentQ) {
+                            -kotlin.math.abs(sin(nPhase)).toFloat() * (width * 0.016f) * eqAmp
+                        } else if (isLit) {
+                            -width * 0.004f
+                        } else {
+                            0f
+                        }
+                        instNotePaint.textSize = width * (if (isCurrentQ) 0.056f else if (isLit) 0.051f else 0.045f)
+                        instNotePaint.color = if (isLit) sungTint else unsungTint
+                        canvas.drawText(interludeNotes[n], nx, noteY + bounce, instNotePaint)
                     }
                 } else {
                     val lineStart = state.lyrics[i].timeMs

@@ -1,4 +1,4 @@
-name: Build BeatWall v11.6 APK
+name: Build BeatWall v11.7 APK
 
 on:
   push:
@@ -26,25 +26,25 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build Signed Release APK (v11.6)
+      - name: Build Signed Release APK (v11.7)
         run: |
           if [ -f BeatWall/settings.gradle.kts ]; then
             cd BeatWall
           fi
           gradle assembleRelease --no-daemon
-          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/BeatWall-v11.6.apk
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/BeatWall-v11.7.apk
 
-      - name: Upload BeatWall v11.6 Release APK Artifact
+      - name: Upload BeatWall v11.7 Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BeatWall-v11.6-release-apk
-          path: "**/app/build/outputs/apk/release/BeatWall-v11.6.apk"
+          name: BeatWall-v11.7-release-apk
+          path: "**/app/build/outputs/apk/release/BeatWall-v11.7.apk"
 
-      - name: Publish GitHub Release v11.6
+      - name: Publish GitHub Release v11.7
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v11.6
-          name: BeatWall v11.6
-          body: "BeatWall v11.6 — 20 polished 120 Hz LTPO worlds, true 9-line corner-to-corner 2-shade karaoke lyrics, zero-allocation rendering, and One UI Quick Settings tile."
-          files: "**/app/build/outputs/apk/release/BeatWall-v11.6.apk"
+          tag_name: v11.7
+          name: BeatWall v11.7
+          body: "BeatWall v11.7 — 20 polished 120 Hz LTPO worlds, true 9-line corner-to-corner 2-shade karaoke lyrics, zero-allocation rendering, and One UI Quick Settings tile."
+          files: "**/app/build/outputs/apk/release/BeatWall-v11.7.apk"
           fail_on_unmatched_files: false

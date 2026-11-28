@@ -108,6 +108,35 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
     private var currentState: ActiveTrackState? = null
     private var sessionsRegistered = false
 
+    private fun resyncPositionFromController() {
+        val ctrl = activeController ?: return
+        val pb = ctrl.playbackState ?: return
+        val existing = currentState ?: return
+        val stateCode = pb.state
+        if (stateCode == PlaybackState.STATE_STOPPED || stateCode == PlaybackState.STATE_NONE) return
+        val freshPos = pb.position.coerceAtLeast(0L)
+        val freshElapsed = pb.lastPositionUpdateTime.takeIf { it > 0L } ?: SystemClock.elapsedRealtime()
+        val freshSpeed = pb.playbackSpeed.takeIf { it > 0f } ?: 1.0f
+        val updated = existing.copy(
+            isPlaying = stateCode == PlaybackState.STATE_PLAYING,
+            basePositionMs = freshPos,
+            lastUpdateElapsedMs = freshElapsed,
+            playbackSpeed = freshSpeed
+        )
+        currentState = updated
+        notifyListeners(updated)
+    }
+
+    private val earlyResyncRunnable = Runnable { resyncPositionFromController() }
+    private val settledResyncRunnable = Runnable { resyncPositionFromController() }
+
+    private fun scheduleEarlyPositionResync() {
+        mainHandler.removeCallbacks(earlyResyncRunnable)
+        mainHandler.removeCallbacks(settledResyncRunnable)
+        mainHandler.postDelayed(earlyResyncRunnable, 1500L)
+        mainHandler.postDelayed(settledResyncRunnable, 4000L)
+    }
+
     private val pauseTimeoutRunnable = Runnable {
         lyricsJob?.cancel()
         artJob?.cancel()
@@ -199,6 +228,8 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
 
         if (chosen == null) {
             mainHandler.removeCallbacks(pauseTimeoutRunnable)
+            mainHandler.removeCallbacks(earlyResyncRunnable)
+            mainHandler.removeCallbacks(settledResyncRunnable)
             currentTrackKey = null
             artLoadedForTrackKey = null
             currentArtSignature = null
@@ -326,6 +357,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         val isNotebook = pkg == notebookLmPkg || pkg in browserAudioPkgs
 
         if (isNewTrack) {
+            scheduleEarlyPositionResync()
             if (pkg != youtubePkg) {
                 currentState = ActiveTrackState(
                     trackKey = trackKey,
@@ -367,10 +399,17 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
                     lastUpdateElapsedMs = updateElapsed,
                     playbackSpeed = speed
                 )
+                val livePb = activeController?.playbackState
+                val syncedPos = (livePb?.position ?: latest.basePositionMs).coerceAtLeast(0L)
+                val syncedElapsed = livePb?.lastPositionUpdateTime?.takeIf { it > 0L } ?: latest.lastUpdateElapsedMs
+                val syncedSpeed = livePb?.playbackSpeed?.takeIf { it > 0f } ?: latest.playbackSpeed
                 currentState = latest.copy(
                     lyrics = lyrics,
                     showLyrics = lyrics.isNotEmpty(),
-                    isFetchingLyrics = false
+                    isFetchingLyrics = false,
+                    basePositionMs = syncedPos,
+                    lastUpdateElapsedMs = syncedElapsed,
+                    playbackSpeed = syncedSpeed
                 )
                 notifyListeners(currentState)
             }
