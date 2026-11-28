@@ -10,7 +10,8 @@ object LrcParser {
     private val TIMESTAMP_REGEX = Regex("""\[(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?]""")
     private val META_TAG_REGEX = Regex("""^\[(?:ti|ar|al|au|length|by|offset|re|ve):.*]$""", RegexOption.IGNORE_CASE)
     private val SYMBOL_ONLY_REGEX = Regex("""^[\s♪♫•·.\-_*~]+$""")
-    private const val INTERLUDE_GAP_MS = 14000L
+    private const val INTRO_GAP_MS = 3500L
+    private const val INTERLUDE_GAP_MS = 10000L
 
     fun parse(rawLrc: String?): List<LyricLine> {
         if (rawLrc.isNullOrBlank()) return emptyList()
@@ -50,10 +51,25 @@ object LrcParser {
         if (parsed.isEmpty()) return emptyList()
         parsed.sortBy { it.timeMs }
 
-        // Deduplicate identical timestamps and inject Apple-Music-style • • • for >6s gaps
-        val result = ArrayList<LyricLine>(parsed.size + 8)
-        if (parsed.first().timeMs > INTERLUDE_GAP_MS) {
-            result.add(LyricLine(0L, "• • •", isInterlude = true))
+        // Helper to split an instrumental span into 2..5 evenly paced diagonal rows (~2.5-3.5s each)
+        val result = ArrayList<LyricLine>(parsed.size + 16)
+        fun addDiagonalInterludeRows(startMs: Long, endMs: Long) {
+            val span = (endMs - startMs).coerceAtLeast(1000L)
+            val rows = when {
+                span >= 14_000L -> 5
+                span >= 9_500L -> 4
+                span >= 6_000L -> 3
+                else -> 2
+            }
+            val step = span / rows
+            for (r in 0 until rows) {
+                result.add(LyricLine(startMs + r * step, "• • •", isInterlude = true))
+            }
+        }
+
+        // Restore intro instrumentals for any song whose first vocal starts after 3.5s
+        if (parsed.first().timeMs > INTRO_GAP_MS) {
+            addDiagonalInterludeRows(0L, parsed.first().timeMs)
         }
 
         for (i in parsed.indices) {
@@ -67,7 +83,7 @@ object LrcParser {
             if (result.isNotEmpty() && !result.last().isInterlude && !curr.isInterlude) {
                 val gap = curr.timeMs - result.last().timeMs
                 if (gap > INTERLUDE_GAP_MS) {
-                    result.add(LyricLine(result.last().timeMs + 4500L, "• • •", isInterlude = true))
+                    addDiagonalInterludeRows(result.last().timeMs + 3500L, curr.timeMs)
                 }
             }
             result.add(curr)

@@ -242,35 +242,65 @@ class ArtEffectProcessor {
         }
     }
 
-    fun processNotebookStudioFallback(): ProcessedArt {
+    fun processNotebookStudioFallback(titleSeed: String = ""): ProcessedArt {
+        // 6 curated dual-host AI study palettes rotated deterministically by topic title so it stays fresh every day
+        val themes = arrayOf(
+            intArrayOf(0xFF38BDF8.toInt(), 0xFFA78BFA.toInt(), 0xFF0E7490.toInt(), 0xFF312E81.toInt()), // Cyan & Violet
+            intArrayOf(0xFF34D399.toInt(), 0xFF38BDF8.toInt(), 0xFF065F46.toInt(), 0xFF0E7490.toInt()), // Emerald & Sky
+            intArrayOf(0xFFFBBF24.toInt(), 0xFFFB7185.toInt(), 0xFF92400E.toInt(), 0xFF881337.toInt()), // Amber & Coral
+            intArrayOf(0xFFF472B6.toInt(), 0xFF818CF8.toInt(), 0xFF831843.toInt(), 0xFF3730A3.toInt()), // Rose & Indigo
+            intArrayOf(0xFF2DD4BF.toInt(), 0xFF60A5FA.toInt(), 0xFF115E59.toInt(), 0xFF1E3A8A.toInt()), // Teal & Cobalt
+            intArrayOf(0xFFFB923C.toInt(), 0xFFC084FC.toInt(), 0xFF7C2D12.toInt(), 0xFF581C87.toInt())  // Sunset & Orchid
+        )
+        val idx = ((titleSeed.hashCode() and 0x7FFFFFFF) % themes.size)
+        val hostA = themes[idx][0]
+        val hostB = themes[idx][1]
+        val deepA = themes[idx][2]
+        val deepB = themes[idx][3]
+
         val cover = Bitmap.createBitmap(360, 360, Bitmap.Config.ARGB_8888)
         val c = Canvas(cover)
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
             shader = LinearGradient(
                 0f, 0f, 360f, 360f,
-                intArrayOf(0xFF0F172A.toInt(), 0xFF1E1B4B.toInt(), 0xFF0E7490.toInt()),
+                intArrayOf(0xFF0A0D18.toInt(), deepB, deepA),
                 null, Shader.TileMode.CLAMP
             )
         }
         c.drawRect(0f, 0f, 360f, 360f, bgPaint)
         val orbA = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = RadialGradient(135f, 180f, 110f, intArrayOf(0xCC38BDF8.toInt(), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            shader = RadialGradient(130f, 180f, 118f, intArrayOf(withAlpha(hostA, 200), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
         }
         val orbB = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = RadialGradient(225f, 180f, 110f, intArrayOf(0xCC818CF8.toInt(), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            shader = RadialGradient(230f, 180f, 118f, intArrayOf(withAlpha(hostB, 200), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
         }
-        c.drawCircle(135f, 180f, 110f, orbA)
-        c.drawCircle(225f, 180f, 110f, orbB)
+        c.drawCircle(130f, 180f, 118f, orbA)
+        c.drawCircle(230f, 180f, 118f, orbB)
+        // Minimalist dual-wave studio emblem inside cover art
+        val waveP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 7f
+            strokeCap = Paint.Cap.ROUND
+            color = 0xEEFFFFFF.toInt()
+        }
+        val emPath = android.graphics.Path()
+        for (k in 0..24) {
+            val u = k / 24f
+            val x = 68f + u * 224f
+            val y = 180f + kotlin.math.sin(u * Math.PI * 3.0).toFloat() * 34f * kotlin.math.sin(u * Math.PI).toFloat()
+            if (k == 0) emPath.moveTo(x, y) else emPath.lineTo(x, y)
+        }
+        c.drawPath(emPath, waveP)
 
         val targetSlot = pool[poolIdx]
         poolIdx = (poolIdx + 1) % pool.size
         val bc = Canvas(targetSlot)
-        bc.drawColor(0xFF050814.toInt())
+        bc.drawColor(0xFF05070E.toInt())
         val g1 = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
-            shader = RadialGradient(blurWidth * 0.30f, blurHeight * 0.36f, blurWidth * 1.0f, intArrayOf(0xA00E7490.toInt(), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            shader = RadialGradient(blurWidth * 0.28f, blurHeight * 0.36f, blurWidth * 1.0f, intArrayOf(withAlpha(deepA, 170), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
         }
         val g2 = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG).apply {
-            shader = RadialGradient(blurWidth * 0.72f, blurHeight * 0.62f, blurWidth * 1.0f, intArrayOf(0xA0312E81.toInt(), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            shader = RadialGradient(blurWidth * 0.72f, blurHeight * 0.62f, blurWidth * 1.0f, intArrayOf(withAlpha(deepB, 165), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
         }
         bc.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), g1)
         bc.drawRect(0f, 0f, blurWidth.toFloat(), blurHeight.toFloat(), g2)
@@ -280,9 +310,9 @@ class ArtEffectProcessor {
         return ProcessedArt(
             coverArt = cover,
             blurredBackdrop = targetSlot,
-            primaryGlowColor = 0xFF38BDF8.toInt(),
-            secondaryGlowColor = 0xFF312E81.toInt(),
-            lyricAccentColor = 0xFF7DD3FC.toInt()
+            primaryGlowColor = hostA,
+            secondaryGlowColor = hostB,
+            lyricAccentColor = ColorUtils.blendARGB(hostA, Color.WHITE, 0.22f)
         )
     }
 
@@ -387,7 +417,7 @@ class ArtEffectProcessor {
         primaryGlow: Int,
         secondaryGlow: Int
     ) {
-        val blurred = gpuBlurToBitmap(src, blurWidth, blurHeight, radius = 56f)
+        val blurred = gpuBlurToBitmap(src, blurWidth, blurHeight, radius = 68f)
         val canvas = Canvas(dest)
         canvas.drawColor(0xFF05060A.toInt())
 

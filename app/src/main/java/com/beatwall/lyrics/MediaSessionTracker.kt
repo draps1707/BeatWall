@@ -100,6 +100,9 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
 
     private val listeners = LinkedHashSet<Listener>()
     private var activeController: MediaController? = null
+    // Watch ALL active allowed sessions (Spotify, YT Music, NotebookLM, etc.) so starting ANY app
+    // immediately switches focus even when another app was previously paused.
+    private val watchedControllers = HashMap<MediaSession.Token, Pair<MediaController, MediaController.Callback>>()
     private var lyricsJob: Job? = null
     private var artJob: Job? = null
     private var currentTrackKey: String? = null
@@ -204,8 +207,46 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         }
     }
 
+    private fun syncWatchedControllers(allowed: List<MediaController>) {
+        val allowedTokens = allowed.map { it.sessionToken }.toSet()
+        val stale = watchedControllers.keys.filter { it !in allowedTokens }
+        for (tok in stale) {
+            watchedControllers.remove(tok)?.let { (ctrl, cb) ->
+                try { ctrl.unregisterCallback(cb) } catch (_: Exception) {}
+            }
+        }
+        for (ctrl in allowed) {
+            val tok = ctrl.sessionToken
+            if (tok !in watchedControllers) {
+                val cb = object : MediaController.Callback() {
+                    override fun onPlaybackStateChanged(state: PlaybackState?) {
+                        val code = state?.state ?: PlaybackState.STATE_NONE
+                        if ((code == PlaybackState.STATE_PLAYING || code == PlaybackState.STATE_BUFFERING) &&
+                            activeController?.sessionToken != tok
+                        ) {
+                            mainHandler.post { refreshActiveSessions() }
+                        }
+                    }
+                    override fun onMetadataChanged(metadata: MediaMetadata?) {
+                        val code = ctrl.playbackState?.state ?: PlaybackState.STATE_NONE
+                        if ((code == PlaybackState.STATE_PLAYING || code == PlaybackState.STATE_BUFFERING) &&
+                            activeController?.sessionToken != tok
+                        ) {
+                            mainHandler.post { refreshActiveSessions() }
+                        }
+                    }
+                }
+                try {
+                    ctrl.registerCallback(cb, mainHandler)
+                    watchedControllers[tok] = ctrl to cb
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     private fun selectController(controllers: List<MediaController>) {
         val allowed = controllers.filter { isAllowedSession(it) }
+        syncWatchedControllers(allowed)
         val playing = allowed.firstOrNull {
             val st = it.playbackState?.state
             st == PlaybackState.STATE_PLAYING || st == PlaybackState.STATE_BUFFERING
@@ -365,7 +406,7 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
                     title = clean.title,
                     artist = if (isNotebook) clean.artist.ifBlank { "NotebookLM • Audio Overview" } else clean.artist,
                     durationMs = durationMs,
-                    processedArt = if (isNotebook && validRawCover == null && artUri.isNullOrBlank()) artProcessor.processNotebookStudioFallback() else currentState?.processedArt,
+                    processedArt = if (isNotebook) artProcessor.processNotebookStudioFallback(clean.title) else if (currentState?.isNotebookLm == true) null else currentState?.processedArt,
                     lyrics = emptyList(),
                     isPlaying = stateCode == PlaybackState.STATE_PLAYING,
                     showLyrics = false,

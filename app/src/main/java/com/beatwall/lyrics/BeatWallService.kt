@@ -115,6 +115,21 @@ class BeatWallService : WallpaperService() {
         private var sweepShaderCursor = 0
         private val interludeNotes = arrayOf("♪", "♫", "♩", "♬", "♪", "♫", "♩", "♬")
         private val lyricHslBuf = FloatArray(3)
+        private val nbHslBuf = FloatArray(3)
+        private var isThermallyWarm = false
+        private var lastThermalCheckMs = 0L
+
+        private fun refreshThermalGuard(nowMs: Long) {
+            if (nowMs - lastThermalCheckMs < 15_000L && lastThermalCheckMs != 0L) return
+            lastThermalCheckMs = nowMs
+            try {
+                val headroom = powerManager.getThermalHeadroom(10)
+                if (!headroom.isNaN() && headroom > 0f) {
+                    isThermallyWarm = if (isThermallyWarm) headroom >= 0.72f else headroom >= 0.85f
+                }
+            } catch (_: Exception) {
+            }
+        }
 
         private fun getCachedSweepShader(sungCol: Int, unsungCol: Int): LinearGradient {
             val sA = (((Color.alpha(sungCol) + 4) / 8) * 8).coerceIn(0, 255)
@@ -701,7 +716,7 @@ class BeatWallService : WallpaperService() {
         }
 
         private fun isHighRateNeeded(): Boolean {
-            return !isLowBattery
+            return !isLowBattery && !isThermallyWarm
         }
 
         private fun preferredHighFrameRate(): Float {
@@ -875,6 +890,7 @@ class BeatWallService : WallpaperService() {
                     }
                 }
 
+                refreshThermalGuard(SystemClock.elapsedRealtime())
                 val highRate = isHighRateNeeded()
                 // Keep the surface hint aligned with the render cadence. This
                 // avoids requesting a high refresh rate while the low-motion loop
@@ -1007,7 +1023,8 @@ class BeatWallService : WallpaperService() {
 
             val homeAnimFade = (1f - lockBlend).coerceIn(0f, 1f)
             if (homeAnimFade > 0.02f && (state.isPlaying || proceduralAnimator.isCoasting()) && !isLowBattery) {
-                val animScale = moodScale * homeAnimFade * (1f - 0.25f * gapRelaxFactor) * (if (isLongFormFocus) 0.50f else 1.0f)
+                val lyricCalm = if (state.showLyrics && state.lyrics.isNotEmpty()) 0.45f else 0.85f
+                val animScale = moodScale * lyricCalm * homeAnimFade * (1f - 0.25f * gapRelaxFactor) * (if (isLongFormFocus) 0.50f else 1.0f)
                 val animAlpha = (masterAlpha * animScale).toInt().coerceIn(0, 255)
                 proceduralAnimator.draw(
                     canvas = canvas,
@@ -1342,73 +1359,108 @@ class BeatWallService : WallpaperService() {
             timeSec: Double,
             masterAlpha: Int
         ) {
-            val cyBase = if (isLock) height * 0.55f else height * 0.48f
-            val cxBase = width * 0.50f
+            // Dual-Host AI Podcast Studio: serene continuous 360-deg color spectrum (~4 min/cycle)
+            // Quantized to 4-deg hue steps for zero-allocation 24-slot RadialGradient cache hits at 120 Hz
+            val baseHue = (((state.title.hashCode() and 0x7FFFFFFF) % 360).toFloat())
+            val rawHueA = (baseHue + (timeSec * 1.5).toFloat()) % 360f
+            val hueA = ((rawHueA / 4f).toInt() * 4f) % 360f
+            val hueB = (hueA + 70f) % 360f
+            nbHslBuf[0] = hueA; nbHslBuf[1] = 0.82f; nbHslBuf[2] = 0.62f
+            val hostACol = ColorUtils.HSLToColor(nbHslBuf)
+            nbHslBuf[0] = hueB; nbHslBuf[1] = 0.80f; nbHslBuf[2] = 0.66f
+            val hostBCol = ColorUtils.HSLToColor(nbHslBuf)
+            val hostARgb = hostACol and 0x00FFFFFF
+            val hostBRgb = hostBCol and 0x00FFFFFF
+
+            val cy = if (isLock) height * 0.56f else height * 0.50f
+            val cx = width * 0.50f
             val p = studioPhase
-            val baryX = sin(p * 0.42).toFloat() * (width * 0.025f)
-            val baryY = kotlin.math.cos(p * 0.42 * 1.4142).toFloat() * (height * 0.015f)
-            val cx = cxBase + baryX
-            val cy = cyBase + baryY
 
-            val turnA = (0.50f + 0.50f * (0.65f * sin(p * 2.1).toFloat() + 0.35f * sin(p * 2.1 * 1.618).toFloat())).coerceIn(0f, 1f)
-            val turnB = (0.50f + 0.50f * (0.65f * sin(p * 2.1 + PI).toFloat() + 0.35f * sin(p * 2.1 * 1.618 + 2.1).toFloat())).coerceIn(0f, 1f)
-            val sep = width * (0.115f - 0.018f * (turnA * turnB))
+            // Smooth conversational turn-taking between Host A (left-biased) and Host B (right-biased)
+            val turnA = (0.45f + 0.55f * (0.65f * sin(p * 1.45).toFloat() + 0.35f * sin(p * 2.35).toFloat())).coerceIn(0.15f, 1f)
+            val turnB = (0.45f + 0.55f * (0.65f * sin(p * 1.45 + PI).toFloat() + 0.35f * sin(p * 2.35 + 2.0).toFloat())).coerceIn(0.15f, 1f)
 
-            val rA = width * (0.14f + 0.05f * turnA * eqAmp)
-            val rB = width * (0.14f + 0.05f * turnB * eqAmp)
+            // Soft alternating studio halos behind the active speaking host
+            val sep = width * 0.16f
+            val rA = width * (0.24f + 0.08f * turnA * eqAmp)
+            val rB = width * (0.24f + 0.08f * turnB * eqAmp)
+            val shA = getCachedSoftRadialShader(hostARgb or (((masterAlpha * (0.24f + 0.24f * turnA) * eqAmp).toInt().coerceIn(0, 255)) shl 24))
+            shaderMatrix.reset(); shaderMatrix.setScale(rA, rA * 0.72f); shaderMatrix.postTranslate(cx - sep, cy)
+            shA.setLocalMatrix(shaderMatrix); orbPaint.shader = shA
+            backdropRect.set(cx - sep - rA, cy - rA * 0.72f, cx - sep + rA, cy + rA * 0.72f)
+            canvas.drawOval(backdropRect, orbPaint)
 
-            val shA = getCachedSoftRadialShader((0x0038BDF8) or (((masterAlpha * (0.38f + 0.25f * turnA)).toInt().coerceIn(0, 255)) shl 24))
-            shaderMatrix.reset(); shaderMatrix.setScale(rA, rA); shaderMatrix.postTranslate(cx - sep, cy)
-            shA.setLocalMatrix(shaderMatrix)
-            orbPaint.shader = shA
-            canvas.drawCircle(cx - sep, cy, rA, orbPaint)
-
-            val shB = getCachedSoftRadialShader((0x00818CF8) or (((masterAlpha * (0.38f + 0.25f * turnB)).toInt().coerceIn(0, 255)) shl 24))
-            shaderMatrix.reset(); shaderMatrix.setScale(rB, rB); shaderMatrix.postTranslate(cx + sep, cy)
-            shB.setLocalMatrix(shaderMatrix)
-            orbPaint.shader = shB
-            canvas.drawCircle(cx + sep, cy, rB, orbPaint)
+            val shB = getCachedSoftRadialShader(hostBRgb or (((masterAlpha * (0.24f + 0.24f * turnB) * eqAmp).toInt().coerceIn(0, 255)) shl 24))
+            shaderMatrix.reset(); shaderMatrix.setScale(rB, rB * 0.72f); shaderMatrix.postTranslate(cx + sep, cy)
+            shB.setLocalMatrix(shaderMatrix); orbPaint.shader = shB
+            backdropRect.set(cx + sep - rB, cy - rB * 0.72f, cx + sep + rB, cy + rB * 0.72f)
+            canvas.drawOval(backdropRect, orbPaint)
             orbPaint.shader = null
 
-            val posMs = state.currentPositionMs()
-            val durMs = state.durationMs
-            val timerText = if (durMs > 0L) {
-                "${formatTime(posMs)}  /  ${formatTime(durMs)}"
-            } else {
-                formatTime(posMs)
+            // Two intertwined living voice waveforms (Host A & Host B) crossing cleanly across center
+            val waveW = width * 0.84f
+            val startX = cx - waveW * 0.5f
+            val steps = 48
+            for (host in 0..1) {
+                val hCol = if (host == 0) hostACol else hostBCol
+                val hTurn = if (host == 0) turnA else turnB
+                val freq = if (host == 0) 2.6 else 3.2
+                val speed = if (host == 0) 2.8 else -2.3
+                val amp = width * (0.042f + 0.056f * hTurn) * (0.25f + 0.75f * eqAmp)
+
+                ribbonPath.reset()
+                for (s in 0..steps) {
+                    val u = s / steps.toFloat()
+                    val x = startX + u * waveW
+                    val env = sin(u * PI).toFloat().let { it * it }
+                    val yOff = (sin(u * PI * 2.0 * freq + p * speed) * 0.65 +
+                        sin(u * PI * 2.0 * (freq * 1.75) - p * speed * 1.3) * 0.35).toFloat() * amp * env
+                    if (s == 0) ribbonPath.moveTo(x, cy + yOff) else ribbonPath.lineTo(x, cy + yOff)
+                }
+                // Soft glow under-stroke + crisp core voice wave
+                ribbonPaint.color = hCol
+                ribbonPaint.strokeWidth = density * (4.2f + 2.5f * hTurn)
+                ribbonPaint.alpha = (masterAlpha * (0.18f + 0.16f * hTurn)).toInt().coerceIn(0, 255)
+                canvas.drawPath(ribbonPath, ribbonPaint)
+
+                ribbonPaint.color = ColorUtils.blendARGB(hCol, Color.WHITE, 0.32f * hTurn)
+                ribbonPaint.strokeWidth = density * (1.8f + 0.9f * hTurn)
+                ribbonPaint.alpha = (masterAlpha * (0.58f + 0.38f * hTurn)).toInt().coerceIn(0, 255)
+                canvas.drawPath(ribbonPath, ribbonPaint)
             }
-            studioTimerPaint.textSize = width * 0.036f
-            studioTimerPaint.alpha = (masterAlpha * 0.78f).toInt()
-            canvas.drawText(timerText, cx, cy + width * 0.22f, studioTimerPaint)
+
+            // Subtle speaker turn-indicator dots below the intertwined waves (no duplicate timer!)
+            val dotY = cy + width * 0.135f
+            dotPaint.color = hostACol; dotPaint.alpha = (masterAlpha * (0.35f + 0.65f * turnA)).toInt().coerceIn(0, 255)
+            canvas.drawCircle(cx - density * 9f, dotY, density * (2.6f + 1.4f * turnA), dotPaint)
+            dotPaint.color = hostBCol; dotPaint.alpha = (masterAlpha * (0.35f + 0.65f * turnB)).toInt().coerceIn(0, 255)
+            canvas.drawCircle(cx + density * 9f, dotY, density * (2.6f + 1.4f * turnB), dotPaint)
         }
 
         private fun drawInstrumentalStudio(
             canvas: Canvas,
             state: ActiveTrackState,
-            lb: Float,
+            lockBlend: Float,
             timeSec: Double,
             accent: Int,
             primary: Int,
             masterAlpha: Int,
             isFocusMode: Boolean = false
         ) {
-            val isPlaying = state.isPlaying && !isLowBattery
-            val cy = height * (0.49f + (0.56f - 0.49f) * lb)
+            // Rich 24-bar symmetric rounded-pill harmonic wave visualizer + 2 silky ribbons + rising sparks (no duplicate timer)
             val cx = width * 0.50f
-            val ribbonLeft = width * 0.14f
-            val ribbonW = width * 0.72f
-            val focusAmpScale = if (isFocusMode) 0.55f else 1.0f
-            val focusSpeedScale = if (isFocusMode) 0.45 else 1.0
-            val amp = width * 0.058f * eqAmp * focusAmpScale
+            val cy = height * (0.505f + (0.565f - 0.505f) * lockBlend)
+            val vibrant = boostLyricAccent(accent)
+            val brightTip = ColorUtils.blendARGB(vibrant, Color.WHITE, 0.42f)
+            val focusScale = if (isFocusMode) 0.58f else 1.0f
 
-            // Soft radial studio aura behind the ribbons synced to studioPhase
+            // 1. Soft breathing radial aura
             if (eqAmp > 0.02f) {
-                val auraBreath = 1.0f + 0.14f * sin(studioPhase * 1.15).toFloat()
-                val auraRx = width * 0.42f * auraBreath
-                val auraRy = width * 0.16f * auraBreath
-                val auraAlpha = (masterAlpha * (if (isFocusMode) 0.16f else 0.30f) * eqAmp).toInt().coerceIn(0, 255)
-                val auraCol = (accent and 0x00FFFFFF) or (auraAlpha shl 24)
-                val auraSh = getCachedSoftRadialShader(auraCol)
+                val auraBreath = 1.0f + 0.12f * sin(studioPhase * 1.15).toFloat()
+                val auraRx = width * 0.44f * auraBreath
+                val auraRy = width * 0.18f * auraBreath
+                val auraAlpha = (masterAlpha * (if (isFocusMode) 0.16f else 0.28f) * eqAmp).toInt().coerceIn(0, 255)
+                val auraSh = getCachedSoftRadialShader((vibrant and 0x00FFFFFF) or (auraAlpha shl 24))
                 shaderMatrix.reset(); shaderMatrix.setScale(auraRx, auraRy); shaderMatrix.postTranslate(cx, cy)
                 auraSh.setLocalMatrix(shaderMatrix)
                 orbPaint.shader = auraSh
@@ -1417,66 +1469,74 @@ class BeatWallService : WallpaperService() {
                 orbPaint.shader = null
             }
 
-            // Option B: 3 Harmonic Silk Ribbons undulating smoothly across center (flatten on pause)
+            // 2. Two silky background harmonic ribbons weaving behind the spectrum
+            val spanW = width * 0.84f
+            val startX = cx - spanW * 0.5f
             val steps = 40
-            for (rIdx in 0 until 3) {
-                val col = if (rIdx == 1) primary else accent
-                val baseA = when (rIdx) {
-                    0 -> 0.42f
-                    1 -> 0.68f
-                    else -> 0.36f
-                }
-                ribbonPaint.strokeWidth = density * (if (rIdx == 1) 2.3f else 1.5f)
-                ribbonPaint.color = col
-                ribbonPaint.alpha = (masterAlpha * baseA * (0.45f + 0.55f * eqAmp) * (if (isFocusMode) 0.68f else 1.0f)).toInt().coerceIn(0, 255)
+            for (rIdx in 0 until 2) {
+                val rCol = if (rIdx == 0) vibrant else primary
+                val amp = width * (0.048f + rIdx * 0.014f) * (0.25f + 0.75f * eqAmp) * focusScale
+                val freq = 2.0 + rIdx * 0.7
+                val speed = (if (rIdx == 0) 2.1 else -1.7)
                 ribbonPath.reset()
-                val freq = 2.6 + rIdx * 0.85
-                val speed = (2.8 + rIdx * 0.65) * focusSpeedScale
                 for (s in 0..steps) {
-                    val frac = s.toFloat() / steps
-                    val x = ribbonLeft + frac * ribbonW
-                    val env = sin(frac * PI).toFloat()
-                    val y = cy + sin(frac * freq * PI - studioPhase * speed + rIdx * 1.4).toFloat() * amp * env
-                    if (s == 0) ribbonPath.moveTo(x, y) else ribbonPath.lineTo(x, y)
+                    val u = s / steps.toFloat()
+                    val x = startX + u * spanW
+                    val env = sin(u * PI).toFloat().let { it * it }
+                    val yOff = sin(u * PI * 2.0 * freq + studioPhase * speed).toFloat() * amp * env
+                    if (s == 0) ribbonPath.moveTo(x, cy + yOff) else ribbonPath.lineTo(x, cy + yOff)
                 }
+                ribbonPaint.color = rCol
+                ribbonPaint.strokeWidth = density * 1.7f
+                ribbonPaint.alpha = (masterAlpha * 0.34f * focusScale).toInt().coerceIn(0, 255)
                 canvas.drawPath(ribbonPath, ribbonPaint)
             }
 
-            // Option A: Soft floating ♪ ♫ ♬ notes above + minimal MM:SS / MM:SS timer below
-            val noteGap = width * 0.060f
-            instNotePaint.textSize = width * 0.044f
-            instNotePaint.color = accent
-            val noteBaseY = cy - width * 0.11f
-            for (d in -1..1) {
-                if (isPlaying) {
-                    val phase = timeSec * 2.8 - (d + 1) * 0.9
-                    val wave = 0.45f + 0.55f * ((sin(phase) + 1.0) * 0.5).toFloat()
-                    val bob = sin(phase).toFloat() * (width * 0.008f) * eqAmp
-                    instNotePaint.alpha = (masterAlpha * 0.82f * wave).toInt().coerceIn(20, 255)
-                    canvas.drawText(instNotes[d + 1], cx + d * noteGap, noteBaseY + bob, instNotePaint)
-                } else {
-                    instNotePaint.alpha = (masterAlpha * 0.38f).toInt().coerceIn(15, 255)
-                    canvas.drawText(instNotes[d + 1], cx + d * noteGap, noteBaseY, instNotePaint)
+            // 3. 24-bar symmetric rounded-pill harmonic spectrum (120 Hz zero-allocation)
+            val barCount = 24
+            val specW = width * 0.76f
+            val barStep = specW / (barCount - 1)
+            val barStartX = cx - specW * 0.5f
+            val maxHalfH = width * 0.115f * focusScale
+            eqBarPaint.strokeCap = Paint.Cap.ROUND
+            eqBarPaint.strokeWidth = density * 3.8f
+
+            for (b in 0 until barCount) {
+                val u = b / (barCount - 1f) // 0..1
+                val bell = sin(u * PI).toFloat()
+                val sym = abs(u - 0.5f) * 2f // 0 at center, 1 at edges
+                val wave1 = 0.5f + 0.5f * sin(studioPhase * 3.1 - sym * 5.2).toFloat()
+                val wave2 = 0.5f + 0.5f * sin(studioPhase * 4.7 + b * 0.65).toFloat()
+                val energy = (0.16f + 0.84f * (0.62f * wave1 + 0.38f * wave2) * eqAmp) * bell
+                val halfH = (density * 3.5f + maxHalfH * energy)
+                val bx = barStartX + b * barStep
+
+                // Soft translucent bloom under-stroke (zero Gaussian blur cost) + crisp bright core bar
+                val barCol = ColorUtils.blendARGB(vibrant, brightTip, (energy * 0.85f).coerceIn(0f, 1f))
+                if (energy > 0.28f) {
+                    eqBarPaint.color = vibrant
+                    eqBarPaint.strokeWidth = density * 8.6f
+                    eqBarPaint.alpha = (masterAlpha * 0.20f * energy).toInt().coerceIn(0, 255)
+                    canvas.drawLine(bx, cy - halfH, bx, cy + halfH, eqBarPaint)
+                }
+                eqBarPaint.strokeWidth = density * 3.8f
+                eqBarPaint.color = barCol
+                eqBarPaint.alpha = (masterAlpha * (0.42f + 0.56f * energy)).toInt().coerceIn(0, 255)
+                canvas.drawLine(bx, cy - halfH, bx, cy + halfH, eqBarPaint)
+            }
+
+            // 4. Subtle rising ambient sparks in album's vibrant glow
+            if (eqAmp > 0.1f && !isFocusMode) {
+                for (sp in 0 until 8) {
+                    val phase = (((studioPhase * 0.14 + sp * 0.137) % 1.0 + 1.0) % 1.0).toFloat()
+                    val fade = sin(phase * PI).toFloat().coerceIn(0f, 1f)
+                    val sx = cx + sin(sp * 2.4 + studioPhase * 0.6).toFloat() * width * 0.34f
+                    val sy = cy + width * 0.08f - phase * width * 0.24f
+                    dotPaint.color = brightTip
+                    dotPaint.alpha = (masterAlpha * 0.55f * fade * eqAmp).toInt().coerceIn(0, 255)
+                    canvas.drawCircle(sx, sy, density * (1.3f + (sp % 3) * 0.5f), dotPaint)
                 }
             }
-
-            val posMs = state.currentPositionMs()
-            val durMs = state.durationMs
-            val timerText = if (durMs > 0L) {
-                "${formatTime(posMs)}  /  ${formatTime(durMs)}"
-            } else {
-                formatTime(posMs)
-            }
-            studioTimerPaint.textSize = width * 0.034f
-            studioTimerPaint.alpha = (masterAlpha * (if (isPlaying) 0.78f else 0.45f)).toInt()
-            canvas.drawText(timerText, cx, cy + width * 0.135f, studioTimerPaint)
-        }
-
-        private fun formatTime(ms: Long): String {
-            val totalSec = (ms / 1000L).coerceAtLeast(0L)
-            val m = totalSec / 60L
-            val s = totalSec % 60L
-            return "%02d:%02d".format(m, s)
         }
 
         private fun drawBreathingBackdrop(
@@ -1800,7 +1860,7 @@ class BeatWallService : WallpaperService() {
             // Shade 1 (Unsung & all outer lines): Soft Translucent Album Color (no plain white stealing brightness)
             // Shade 2 (Active sung sweep): Bright White-Hot Pastel Glow of that same album color
             val vibrantColor = boostLyricAccent(accentColor)
-            val sungRgb = ColorUtils.blendARGB(vibrantColor, Color.WHITE, 0.48f) and 0x00FFFFFF
+            val sungRgb = ColorUtils.blendARGB(vibrantColor, Color.WHITE, 0.34f) and 0x00FFFFFF
             val unsungRgb = vibrantColor and 0x00FFFFFF
 
             for (i in start..end) {
@@ -1840,42 +1900,45 @@ class BeatWallService : WallpaperService() {
                 canvas.scale(scale, scale, layout.width / 2f, layout.height / 2f)
 
                 if (state.lyrics[i].isInterlude) {
-                    // Design A: Wide 8-note 4-part progressive phrase (Q1 0-25% -> Q2 25-50% -> Q3 50-75% -> Q4 75-100%)
+                    // Multi-row diagonal instrumental: smooth symbol-by-symbol wave sweep (⌒ ⌒ ⌒ ⌒)
                     val lineStart = state.lyrics[i].timeMs
-                    val nextStart = if (i + 1 < state.lyrics.size) state.lyrics[i + 1].timeMs else lineStart + 10_000L
-                    val lineDur = (nextStart - lineStart).coerceAtLeast(1000L)
-                    val interludeProg = when {
+                    val nextStart = if (i + 1 < state.lyrics.size) state.lyrics[i + 1].timeMs else lineStart + 3000L
+                    val lineDur = (nextStart - lineStart).coerceAtLeast(800L)
+                    val rowProg = when {
                         i < approxIdx -> 1.0f
-                        i == approxIdx -> ((posMs - lineStart).toFloat() / lineDur).coerceIn(0f, 1f)
+                        i == approxIdx -> ((posMs - lineStart).toFloat() / (lineDur * 0.96f)).coerceIn(0f, 1f)
                         else -> 0.0f
                     }
-                    val activeQuarter = if (i == approxIdx) (interludeProg * 4f).toInt().coerceIn(0, 3) else -1
-                    val litQuarters = if (i == approxIdx) activeQuarter + 1 else 0
+                    val releaseFade = if (i < approxIdx) {
+                        val nextLineMs = state.lyrics[approxIdx].timeMs
+                        (1f - ((posMs - nextLineMs).coerceAtLeast(0L) / 450f)).coerceIn(0f, 1f)
+                    } else 0f
 
                     val sungTint = sungRgb or (lineAlpha shl 24)
                     val unsungTint = unsungRgb or (((lineAlpha * 0.74f).toInt().coerceIn(0, 255)) shl 24)
                     val baseX = layout.width / 2f
                     val noteY = layout.height / 2f + width * 0.014f
-                    val pairSpan = width * 0.175f
-                    val intraGap = width * 0.052f
+                    val noteCount = 6
+                    val noteGap = width * 0.082f
+                    val sweepPos = rowProg * (noteCount - 1)
 
-                    for (n in 0 until 8) {
-                        val quarter = n / 2 // 0..3
-                        val inPair = if (n % 2 == 0) -0.5f else 0.5f
-                        val nx = baseX + (quarter - 1.5f) * pairSpan + inPair * intraGap
-                        val isLit = quarter < litQuarters
-                        val isCurrentQ = quarter == activeQuarter
-                        val nPhase = studioPhase * 3.6 - n * 0.65
-                        val bounce = if (isCurrentQ) {
-                            -kotlin.math.abs(sin(nPhase)).toFloat() * (width * 0.016f) * eqAmp
-                        } else if (isLit) {
-                            -width * 0.004f
-                        } else {
-                            0f
+                    for (n in 0 until noteCount) {
+                        val nx = baseX + (n - (noteCount - 1) * 0.5f) * noteGap
+                        val litBlend = when {
+                            i == approxIdx -> smoothstep((sweepPos - n + 0.85f) / 0.85f)
+                            releaseFade > 0.02f -> releaseFade
+                            else -> 0f
                         }
-                        instNotePaint.textSize = width * (if (isCurrentQ) 0.056f else if (isLit) 0.051f else 0.045f)
-                        instNotePaint.color = if (isLit) sungTint else unsungTint
-                        canvas.drawText(interludeNotes[n], nx, noteY + bounce, instNotePaint)
+                        // Soft Gaussian arc hop (⌒) as the bright sweep glides smoothly over each symbol
+                        val distToHead = abs(sweepPos - n)
+                        val hopArc = if (i == approxIdx && distToHead < 1.2f) {
+                            val u = 1f - (distToHead / 1.2f)
+                            (u * u * (3f - 2f * u)) * (width * 0.022f) * eqAmp
+                        } else 0f
+                        val gentleFloat = sin(studioPhase * 2.4 - n * 0.75).toFloat() * (width * 0.004f) * eqAmp
+                        instNotePaint.textSize = width * (0.048f + 0.008f * litBlend)
+                        instNotePaint.color = ColorUtils.blendARGB(unsungTint, sungTint, litBlend)
+                        canvas.drawText(interludeNotes[n], nx, noteY - hopArc + gentleFloat, instNotePaint)
                     }
                 } else {
                     val lineStart = state.lyrics[i].timeMs
