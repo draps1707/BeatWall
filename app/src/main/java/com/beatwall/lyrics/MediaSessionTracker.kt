@@ -1,5 +1,6 @@
 package com.beatwall.lyrics
 
+import android.media.session.MediaSession
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory

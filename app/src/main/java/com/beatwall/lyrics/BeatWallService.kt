@@ -1539,6 +1539,13 @@ class BeatWallService : WallpaperService() {
             }
         }
 
+        private fun formatTime(ms: Long): String {
+            val totalSec = (ms / 1000L).coerceAtLeast(0L)
+            val m = totalSec / 60L
+            val s = totalSec % 60L
+            return String.format(java.util.Locale.US, "%02d:%02d", m, s)
+        }
+
         private fun drawBreathingBackdrop(
             canvas: Canvas,
             bmp: android.graphics.Bitmap,
