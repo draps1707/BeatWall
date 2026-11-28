@@ -116,20 +116,7 @@ class BeatWallService : WallpaperService() {
         private val interludeNotes = arrayOf("♪", "♫", "♩", "♬", "♪", "♫", "♩", "♬")
         private val lyricHslBuf = FloatArray(3)
         private val nbHslBuf = FloatArray(3)
-        private var isThermallyWarm = false
-        private var lastThermalCheckMs = 0L
 
-        private fun refreshThermalGuard(nowMs: Long) {
-            if (nowMs - lastThermalCheckMs < 15_000L && lastThermalCheckMs != 0L) return
-            lastThermalCheckMs = nowMs
-            try {
-                val headroom = powerManager.getThermalHeadroom(10)
-                if (!headroom.isNaN() && headroom > 0f) {
-                    isThermallyWarm = if (isThermallyWarm) headroom >= 0.72f else headroom >= 0.85f
-                }
-            } catch (_: Exception) {
-            }
-        }
 
         private fun getCachedSweepShader(sungCol: Int, unsungCol: Int): LinearGradient {
             val sA = (((Color.alpha(sungCol) + 4) / 8) * 8).coerceIn(0, 255)
@@ -534,6 +521,7 @@ class BeatWallService : WallpaperService() {
         override fun onVisibilityChanged(visible: Boolean) {
             this.visible = visible
             if (visible && powerManager.isInteractive) {
+                wallpaperZoom = 0f
                 val hiddenMs = if (lastHiddenAtMs > 0L) SystemClock.elapsedRealtime() - lastHiddenAtMs else 0L
                 // Keep warm in-memory sky/weather caches on quick unlocks, app switches, shade & drawer toggles
                 if (hiddenMs > 15_000L || lastEnvCacheMs == 0L) {
@@ -716,7 +704,7 @@ class BeatWallService : WallpaperService() {
         }
 
         private fun isHighRateNeeded(): Boolean {
-            return !isLowBattery && !isThermallyWarm
+            return !isLowBattery
         }
 
         private fun preferredHighFrameRate(): Float {
@@ -757,9 +745,8 @@ class BeatWallService : WallpaperService() {
         }
 
         private fun updateLoopState() {
-            val targetHz = targetFrameRate()
-            if (targetHz > 0f) {
-                setSurfaceFrameRate(targetHz)
+            if (needsAnimation()) {
+                setSurfaceFrameRate(if (isHighRateNeeded()) preferredHighFrameRate() else 0f)
                 scheduleNextFrame()
             } else {
                 stopLoop()
@@ -890,7 +877,6 @@ class BeatWallService : WallpaperService() {
                     }
                 }
 
-                refreshThermalGuard(SystemClock.elapsedRealtime())
                 val highRate = isHighRateNeeded()
                 // Keep the surface hint aligned with the render cadence. This
                 // avoids requesting a high refresh rate while the low-motion loop
