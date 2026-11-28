@@ -1013,14 +1013,14 @@ class LandscapeEngine {
 
             WorldBiome.SANTORINI_CLIFFSIDE -> {
                 buildHeadland(layerPaths[0], wf, baseH, hf * 0.025f, true, dayOfYear + 9)
-                // Craggy stepped volcanic caldera cliff on right
-                layerPaths[3].moveTo(wf * 0.38f, hf); layerPaths[3].lineTo(wf * 0.43f, hf * 0.91f)
-                layerPaths[3].lineTo(wf * 0.45f, hf * 0.85f); layerPaths[3].lineTo(wf * 0.50f, hf * 0.78f)
-                layerPaths[3].lineTo(wf * 0.52f, hf * 0.70f); layerPaths[3].lineTo(wf * 0.56f, hf * 0.62f)
-                layerPaths[3].lineTo(wf * 0.60f, hf * 0.57f); layerPaths[3].lineTo(wf * 0.68f, hf * 0.52f)
-                layerPaths[3].lineTo(wf * 0.78f, hf * 0.47f); layerPaths[3].lineTo(wf * 0.90f, hf * 0.44f)
-                layerPaths[3].lineTo(wf, hf * 0.43f); layerPaths[3].lineTo(wf, hf); layerPaths[3].close()
-                // Whitewashed Cycladic terraces & 3 cobalt-blue dome chapels built in accentPath/layerPaths[2]
+                // Dramatic volcanic caldera cliff with a dedicated rocky promontory for the Oia Windmill (0.52..0.63)
+                layerPaths[3].moveTo(wf * 0.38f, hf); layerPaths[3].lineTo(wf * 0.43f, hf * 0.90f)
+                layerPaths[3].lineTo(wf * 0.47f, hf * 0.80f); layerPaths[3].lineTo(wf * 0.50f, hf * 0.70f)
+                layerPaths[3].lineTo(wf * 0.52f, hf * 0.60f); layerPaths[3].lineTo(wf * 0.55f, hf * 0.560f)
+                layerPaths[3].lineTo(wf * 0.63f, hf * 0.555f); layerPaths[3].lineTo(wf * 0.67f, hf * 0.525f)
+                layerPaths[3].lineTo(wf * 0.75f, hf * 0.485f); layerPaths[3].lineTo(wf * 0.86f, hf * 0.455f)
+                layerPaths[3].lineTo(wf, hf * 0.445f); layerPaths[3].lineTo(wf, hf); layerPaths[3].close()
+                // Cohesive stepped Cycladic village strictly anchored on the cliff (0.65..1.00) + 3 cobalt domes
                 addSantoriniVillage(layerPaths[2], accentPath, wf, hf)
             }
         }
@@ -2289,27 +2289,32 @@ class LandscapeEngine {
         windDir: Float, steadyWind: Float, timeSec: Double, masterAlpha: Int
     ) {
         val seaSpan = (shoreY - horizonY).coerceAtLeast(1f)
-        val shimRgb = if (sky.sunAltDeg > -4f) (sky.sunColor and 0x00FFFFFF) else (sky.moonColor and 0x00FFFFFF)
-        val lumBoost = if (sky.sunAltDeg > -4f) 1.0f else (0.55f + 0.45f * sky.moonIllumination.coerceIn(0f, 1f))
-        val effectiveWind = max(steadyWind, weather.windGustsKmh * 0.35f).coerceAtLeast(0f)
-        val windScale = (0.75f + (effectiveWind / 28f)).coerceIn(0.75f, 1.8f)
-        // Precipitation roughens the surface and suppresses polished sun/moon glints.
-        // Gusts influence drift without making calm-weather animation jittery.
-        val rainGlintFactor = when (weather.sky) {
-            SkyWeather.RAIN -> (0.62f - weather.precipMm.coerceIn(0f, 8f) * 0.035f).coerceIn(0.34f, 0.62f)
-            SkyWeather.THUNDERSTORM -> 0.28f
-            else -> 1f
+        val orbVis = if (sky.sunAltDeg > -4f) {
+            ((sky.sunAltDeg + 4f) / 4f).coerceIn(0f, 1f)
+        } else {
+            ((sky.moonAltDeg + 2f) / 4f).coerceIn(0f, 1f)
         }
-        val windPhase = timeSec * (effectiveWind * 0.0012) * windDir.toDouble()
-        val shimBreath = 0.90f + 0.10f * sin(timeSec * 0.45).toFloat()
-        drawSoftMist(canvas, orbX, horizonY + seaSpan * 0.24f, w * 0.085f * windScale, seaSpan * 0.30f, shimRgb or ((masterAlpha * (if (isDay) 0.22f else 0.16f) * lumBoost * shimBreath * rainGlintFactor).toInt().coerceIn(0, 255) shl 24))
-        drawSoftMist(canvas, orbX, horizonY + seaSpan * 0.56f, w * 0.155f * windScale, seaSpan * 0.44f, shimRgb or ((masterAlpha * (if (isDay) 0.12f else 0.09f) * lumBoost * shimBreath * rainGlintFactor).toInt().coerceIn(0, 255) shl 24))
-        for (gIdx in 0 until 4) {
-            val fracY = 0.12f + gIdx * 0.19f
-            val glintVis = ((sin(timeSec * (0.45 + gIdx * 0.12) * 1.618 + gIdx * 1.9) + 1.0) * 0.5).toFloat()
-            val spreadX = sin(windPhase + gIdx * 0.72).toFloat() * (w * (0.018f + 0.022f * fracY) * windScale)
-            val gA = (masterAlpha * (0.14f - 0.07f * fracY) * lumBoost * rainGlintFactor * (0.45f + 0.55f * glintVis)).toInt().coerceIn(0, 255)
-            if (gA > 2) drawSoftMist(canvas, orbX + spreadX, horizonY + seaSpan * fracY, w * (0.038f + 0.032f * fracY) * windScale, seaSpan * (0.045f + 0.035f * fracY), shimRgb or (gA shl 24))
+        if (orbVis > 0.02f) {
+            val shimRgb = if (sky.sunAltDeg > -4f) (sky.sunColor and 0x00FFFFFF) else (sky.moonColor and 0x00FFFFFF)
+            val lumBoost = (if (sky.sunAltDeg > -4f) 1.0f else (0.55f + 0.45f * sky.moonIllumination.coerceIn(0f, 1f))) * orbVis
+            val effectiveWind = max(steadyWind, weather.windGustsKmh * 0.35f).coerceAtLeast(0f)
+            val windScale = (0.75f + (effectiveWind / 28f)).coerceIn(0.75f, 1.8f)
+            val rainGlintFactor = when (weather.sky) {
+                SkyWeather.RAIN -> (0.62f - weather.precipMm.coerceIn(0f, 8f) * 0.035f).coerceIn(0.34f, 0.62f)
+                SkyWeather.THUNDERSTORM -> 0.28f
+                else -> 1f
+            }
+            val windPhase = timeSec * (effectiveWind * 0.0012) * windDir.toDouble()
+            val shimBreath = 0.90f + 0.10f * sin(timeSec * 0.45).toFloat()
+            drawSoftMist(canvas, orbX, horizonY + seaSpan * 0.24f, w * 0.085f * windScale, seaSpan * 0.30f, shimRgb or ((masterAlpha * (if (isDay) 0.22f else 0.16f) * lumBoost * shimBreath * rainGlintFactor).toInt().coerceIn(0, 255) shl 24))
+            drawSoftMist(canvas, orbX, horizonY + seaSpan * 0.56f, w * 0.155f * windScale, seaSpan * 0.44f, shimRgb or ((masterAlpha * (if (isDay) 0.12f else 0.09f) * lumBoost * shimBreath * rainGlintFactor).toInt().coerceIn(0, 255) shl 24))
+            for (gIdx in 0 until 4) {
+                val fracY = 0.12f + gIdx * 0.19f
+                val glintVis = ((sin(timeSec * (0.45 + gIdx * 0.12) * 1.618 + gIdx * 1.9) + 1.0) * 0.5).toFloat()
+                val spreadX = sin(windPhase + gIdx * 0.72).toFloat() * (w * (0.018f + 0.022f * fracY) * windScale)
+                val gA = (masterAlpha * (0.14f - 0.07f * fracY) * lumBoost * rainGlintFactor * (0.45f + 0.55f * glintVis)).toInt().coerceIn(0, 255)
+                if (gA > 2) drawSoftMist(canvas, orbX + spreadX, horizonY + seaSpan * fracY, w * (0.038f + 0.032f * fracY) * windScale, seaSpan * (0.045f + 0.035f * fracY), shimRgb or (gA shl 24))
+            }
         }
         if (weather.sky == SkyWeather.RAIN || weather.sky == SkyWeather.THUNDERSTORM) {
             val previousColor = strokePaint.color
@@ -2680,21 +2685,27 @@ class LandscapeEngine {
     }
 
     private fun addSantoriniVillage(walls: Path, domes: Path, wf: Float, hf: Float) {
+        // Cohesive stepped Oia Cycladic cascade strictly inside cliff rock (x = 0.65..1.00, clear of windmill at 0.58)
         val cubes = arrayOf(
-            floatArrayOf(0.62f, 0.570f, 0.08f, 0.025f), floatArrayOf(0.69f, 0.538f, 0.09f, 0.029f),
-            floatArrayOf(0.77f, 0.495f, 0.10f, 0.029f), floatArrayOf(0.85f, 0.468f, 0.09f, 0.027f),
-            floatArrayOf(0.57f, 0.622f, 0.08f, 0.023f), floatArrayOf(0.64f, 0.602f, 0.09f, 0.025f),
-            floatArrayOf(0.72f, 0.578f, 0.10f, 0.027f), floatArrayOf(0.81f, 0.548f, 0.10f, 0.027f),
-            floatArrayOf(0.60f, 0.652f, 0.08f, 0.021f), floatArrayOf(0.68f, 0.635f, 0.09f, 0.021f)
+            // Upper crown terrace
+            floatArrayOf(0.72f, 0.505f, 0.11f, 0.026f), floatArrayOf(0.82f, 0.478f, 0.10f, 0.028f),
+            floatArrayOf(0.90f, 0.468f, 0.11f, 0.026f),
+            // Middle village tier
+            floatArrayOf(0.66f, 0.558f, 0.11f, 0.026f), floatArrayOf(0.75f, 0.542f, 0.12f, 0.028f),
+            floatArrayOf(0.85f, 0.522f, 0.11f, 0.027f), floatArrayOf(0.93f, 0.510f, 0.08f, 0.025f),
+            // Lower cliffside tier
+            floatArrayOf(0.64f, 0.598f, 0.12f, 0.024f), floatArrayOf(0.74f, 0.586f, 0.13f, 0.025f),
+            floatArrayOf(0.85f, 0.568f, 0.15f, 0.026f), floatArrayOf(0.69f, 0.625f, 0.14f, 0.022f),
+            floatArrayOf(0.81f, 0.612f, 0.19f, 0.024f)
         )
         for (c in cubes) {
             walls.addRect(wf * c[0], hf * c[1] - hf * c[3], wf * (c[0] + c[2]), hf * c[1], Path.Direction.CW)
         }
         val chapelSpecs = arrayOf(
-            Triple(0.67f, 0.530f, 0.030f), Triple(0.80f, 0.468f, 0.036f), Triple(0.90f, 0.518f, 0.028f)
+            Triple(0.72f, 0.516f, 0.028f), Triple(0.83f, 0.472f, 0.034f), Triple(0.92f, 0.508f, 0.026f)
         )
         for (ch in chapelSpecs) {
-            val cx = wf * ch.first; val by = hf * ch.second; val w = wf * ch.third * 1.8f; val h = hf * ch.third * 0.72f
+            val cx = wf * ch.first; val by = hf * ch.second; val w = wf * ch.third * 1.75f; val h = hf * ch.third * 0.70f
             walls.addRect(cx - w * 0.5f, by - h, cx + w * 0.5f, by + 4f, Path.Direction.CW)
             rect.set(cx - w * 0.42f, by - h - w * 0.42f, cx + w * 0.42f, by - h + w * 0.42f)
             domes.addArc(rect, 180f, 180f)
@@ -3625,31 +3636,31 @@ class LandscapeEngine {
         // 1. Crisp white Cycladic crosses atop the 3 cobalt domes
         strokePaint.color = whiteCol; strokePaint.alpha = (masterAlpha * 0.94f).toInt(); strokePaint.strokeWidth = density * 1.15f
         for (idx in 0 until 3) {
-            val cx = w * when (idx) { 0 -> 0.67f; 1 -> 0.80f; else -> 0.90f }
-            val by = h * when (idx) { 0 -> 0.530f; 1 -> 0.468f; else -> 0.518f } + cliffShift
-            val sc = when (idx) { 0 -> 0.030f; 1 -> 0.036f; else -> 0.028f }
-            val domeTopY = by - h * sc * 0.72f - w * sc * 1.8f * 0.42f
-            val crossH = density * 5.2f
+            val cx = w * when (idx) { 0 -> 0.72f; 1 -> 0.83f; else -> 0.92f }
+            val by = h * when (idx) { 0 -> 0.516f; 1 -> 0.472f; else -> 0.508f } + cliffShift
+            val sc = when (idx) { 0 -> 0.028f; 1 -> 0.034f; else -> 0.026f }
+            val domeTopY = by - h * sc * 0.70f - w * sc * 1.75f * 0.42f
+            val crossH = density * 5.0f
             canvas.drawLine(cx, domeTopY + density * 0.5f, cx, domeTopY - crossH, strokePaint)
             canvas.drawLine(cx - crossH * 0.42f, domeTopY - crossH * 0.62f, cx + crossH * 0.42f, domeTopY - crossH * 0.62f, strokePaint)
         }
 
-        // 2. Magenta bougainvillea vine clusters tumbling over whitewashed terrace walls
+        // 2. Magenta bougainvillea vine clusters tumbling over whitewashed terrace ledges
         val bougCol = if (isDay) ColorUtils.blendARGB(0xFFD62B72.toInt(), lightColor, 0.16f)
                       else ColorUtils.blendARGB(0xFF5A1A3C.toInt(), deepVelvet, 0.30f)
         fillPaint.color = bougCol; fillPaint.alpha = (masterAlpha * 0.90f).toInt()
         for (b in 0 until 4) {
-            val bx = w * when (b) { 0 -> 0.635f; 1 -> 0.745f; 2 -> 0.845f; else -> 0.675f }
-            val by = h * when (b) { 0 -> 0.576f; 1 -> 0.548f; 2 -> 0.518f; else -> 0.636f } + cliffShift
-            val r = density * (3.6f + (b % 2) * 0.9f)
+            val bx = w * when (b) { 0 -> 0.695f; 1 -> 0.790f; 2 -> 0.885f; else -> 0.745f }
+            val by = h * when (b) { 0 -> 0.558f; 1 -> 0.542f; 2 -> 0.522f; else -> 0.598f } + cliffShift
+            val r = density * (3.2f + (b % 2) * 0.8f)
             canvas.drawCircle(bx, by, r, fillPaint)
-            canvas.drawCircle(bx + r * 0.85f, by + r * 0.35f, r * 0.78f, fillPaint)
-            canvas.drawCircle(bx - r * 0.72f, by + r * 0.45f, r * 0.70f, fillPaint)
+            canvas.drawCircle(bx + r * 0.85f, by + r * 0.35f, r * 0.76f, fillPaint)
+            canvas.drawCircle(bx - r * 0.70f, by + r * 0.42f, r * 0.68f, fillPaint)
         }
 
-        // 3. Classic whitewashed Oia Cycladic windmill on upper-left cliff shoulder with rotating canvas sails
-        val wmX = w * 0.585f; val wmBaseY = h * 0.586f + cliffShift
-        val wmH = h * 0.042f; val wmW = wmH * 0.44f
+        // 3. Classic whitewashed Oia Cycladic windmill on its own dedicated cliff shoulder (100% clear of houses!)
+        val wmX = w * 0.585f; val wmBaseY = h * 0.562f + cliffShift
+        val wmH = h * 0.039f; val wmW = wmH * 0.44f
         val wallShade = ColorUtils.blendARGB(whiteCol, deepVelvet, if (isDay) 0.26f else 0.42f)
         fillPaint.color = whiteCol; fillPaint.alpha = masterAlpha
         dynPath.reset()
@@ -3690,14 +3701,24 @@ class LandscapeEngine {
         }
         canvas.drawCircle(wmX, hubY, density * 1.6f, fillPaint)
 
-        // 4. Warm golden village windows + soft amber halos after sunset
+        // 4. Crisp warm golden village windows seated accurately inside each house facade (no giant smog blob!)
         val winStr = ((4f - sunAlt) / 7f).coerceIn(0f, 1f)
         if (winStr > 0.05f) {
-            drawSoftMist(canvas, w * 0.74f, h * 0.57f + cliffShift, w * 0.24f, h * 0.11f, 0x00FFD066 or ((masterAlpha * 0.24f * winStr).toInt() shl 24))
-            fillPaint.color = 0xFFFFD468.toInt(); fillPaint.alpha = (masterAlpha * 0.94f * winStr).toInt()
+            drawSoftMist(canvas, w * 0.80f, h * 0.555f + cliffShift, w * 0.16f, h * 0.075f, 0x00FFD066 or ((masterAlpha * 0.11f * winStr).toInt() shl 24))
+            fillPaint.color = 0xFFFFD972.toInt(); fillPaint.alpha = (masterAlpha * 0.94f * winStr).toInt()
             for (wIdx in 0 until 10) {
-                val wx = w * (0.59f + (wIdx % 5) * 0.072f)
-                val wy = h * (0.605f - (wIdx % 5) * 0.028f + (wIdx / 5) * 0.036f) + cliffShift
+                val wx = w * when (wIdx) {
+                    0 -> 0.76f; 1 -> 0.86f; 2 -> 0.94f
+                    3 -> 0.70f; 4 -> 0.80f; 5 -> 0.90f
+                    6 -> 0.68f; 7 -> 0.78f; 8 -> 0.89f
+                    else -> 0.75f
+                }
+                val wy = h * when (wIdx) {
+                    0 -> 0.492f; 1 -> 0.464f; 2 -> 0.455f
+                    3 -> 0.545f; 4 -> 0.528f; 5 -> 0.509f
+                    6 -> 0.586f; 7 -> 0.573f; 8 -> 0.555f
+                    else -> 0.614f
+                } + cliffShift
                 canvas.drawRect(wx - density * 1.3f, wy - density * 1.8f, wx + density * 1.3f, wy + density * 1.8f, fillPaint)
             }
         }

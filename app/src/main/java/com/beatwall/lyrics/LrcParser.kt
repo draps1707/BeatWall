@@ -48,7 +48,7 @@ object LrcParser {
             }
         }
 
-        if (parsed.isEmpty()) return emptyList()
+        if (parsed.isEmpty() || parsed.none { !it.isInterlude }) return emptyList()
         parsed.sortBy { it.timeMs }
 
         // Split ANY instrumental span (intro, mid-song drop/solo, explicit LRC blank/symbol line, or long outro)

@@ -169,19 +169,22 @@ class ProceduralAnimator {
         ry: Float,
         colWithAlpha: Int
     ) {
-        val midCol = (colWithAlpha and 0x00FFFFFF) or (((Color.alpha(colWithAlpha) * 0.38f).toInt()) shl 24)
+        val rgb = colWithAlpha and 0x00FFFFFF
+        val qA = (((Color.alpha(colWithAlpha) + 4) / 8) * 8).coerceIn(0, 255)
+        val qCol = rgb or (qA shl 24)
+        val midCol = rgb or (((qA * 0.38f).toInt()) shl 24)
         val sh = when (slot) {
-            0 -> if (cachedColA == colWithAlpha && cachedShaderA != null) cachedShaderA!! else {
-                RadialGradient(0f, 0f, 1f, intArrayOf(colWithAlpha, midCol, Color.TRANSPARENT), floatArrayOf(0f, 0.52f, 1f), Shader.TileMode.CLAMP)
-                    .also { cachedColA = colWithAlpha; cachedShaderA = it }
+            0 -> if (cachedColA == qCol && cachedShaderA != null) cachedShaderA!! else {
+                RadialGradient(0f, 0f, 1f, intArrayOf(qCol, midCol, Color.TRANSPARENT), floatArrayOf(0f, 0.52f, 1f), Shader.TileMode.CLAMP)
+                    .also { cachedColA = qCol; cachedShaderA = it }
             }
-            1 -> if (cachedColB == colWithAlpha && cachedShaderB != null) cachedShaderB!! else {
-                RadialGradient(0f, 0f, 1f, intArrayOf(colWithAlpha, midCol, Color.TRANSPARENT), floatArrayOf(0f, 0.52f, 1f), Shader.TileMode.CLAMP)
-                    .also { cachedColB = colWithAlpha; cachedShaderB = it }
+            1 -> if (cachedColB == qCol && cachedShaderB != null) cachedShaderB!! else {
+                RadialGradient(0f, 0f, 1f, intArrayOf(qCol, midCol, Color.TRANSPARENT), floatArrayOf(0f, 0.52f, 1f), Shader.TileMode.CLAMP)
+                    .also { cachedColB = qCol; cachedShaderB = it }
             }
-            else -> if (cachedColC == colWithAlpha && cachedShaderC != null) cachedShaderC!! else {
-                RadialGradient(0f, 0f, 1f, intArrayOf(colWithAlpha, midCol, Color.TRANSPARENT), floatArrayOf(0f, 0.52f, 1f), Shader.TileMode.CLAMP)
-                    .also { cachedColC = colWithAlpha; cachedShaderC = it }
+            else -> if (cachedColC == qCol && cachedShaderC != null) cachedShaderC!! else {
+                RadialGradient(0f, 0f, 1f, intArrayOf(qCol, midCol, Color.TRANSPARENT), floatArrayOf(0f, 0.52f, 1f), Shader.TileMode.CLAMP)
+                    .also { cachedColC = qCol; cachedShaderC = it }
             }
         }
         shaderMatrix.reset()

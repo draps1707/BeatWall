@@ -149,9 +149,16 @@ class BeatWallService : WallpaperService() {
         }
 
         // Instant live refresh when Quick Settings tile or MainActivity changes world/time
-        private val prefsChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-            lastEnvCacheMs = 0L
-            lastSkyComputeMs = 0L
+        private val prefsChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == null || key == "loc_lat" || key == "loc_lon" || key == "loc_city" ||
+                key == "sky_preview_minute" || key == "preview_day_of_year" || key == "weather_ts"
+            ) {
+                lastEnvCacheMs = 0L
+                lastSkyComputeMs = 0L
+                if (visible && surfaceReady && powerManager.isInteractive) {
+                    scheduleNextFrame()
+                }
+            }
         }
 
         // Debounced SystemUI color notification (fires after crossfade finishes so One UI never hitches mid-transition)
@@ -204,6 +211,7 @@ class BeatWallService : WallpaperService() {
         private var prevSpringY = 0f
         private var prevLyricsAlpha = 0f
         private var measuredTrackKey: String? = null
+        private var measuredLyricsRef: List<LyricLine>? = null
 
         private var headerTitleLayout: StaticLayout? = null
         private var headerTitleCacheKey: String? = null
@@ -231,6 +239,7 @@ class BeatWallService : WallpaperService() {
         }
         private var cachedSkySnapshot: SkySnapshot? = null
         private var lastSkyComputeMs = 0L
+        private var lastSkyPreviewMin = Int.MIN_VALUE
 
         private fun effectiveTimeMillisAndMinute(): Pair<Long, Int> {
             val prevMin = LocationStore.getPreviewMinute(applicationContext)
@@ -248,14 +257,16 @@ class BeatWallService : WallpaperService() {
             val prevMin = LocationStore.getPreviewMinute(applicationContext)
             val nowMs = System.currentTimeMillis()
             val existing = cachedSkySnapshot
-            if (prevMin < 0 && existing != null && kotlin.math.abs(nowMs - lastSkyComputeMs) < 30_000L) {
+            if (existing != null && prevMin == lastSkyPreviewMin && lastSkyComputeMs > 0L &&
+                (prevMin >= 0 || kotlin.math.abs(nowMs - lastSkyComputeMs) < 30_000L)
+            ) {
                 return existing
             }
             val loc = LocationStore.load(applicationContext)
             val (targetMs, _) = effectiveTimeMillisAndMinute()
             val snap = SkyAstronomy.compute(targetMs, loc.lat, loc.lon)
             val horizonY = height * 0.66f
-            val topY = if (isLock) height * 0.09f else height * 0.07f
+            val topY = height * 0.08f
             visibleStarCount = SkyAstronomy.projectStars(
                 snap.lstDeg, snap.latDeg, width, horizonY, topY,
                 starX, starY, starR, starCol, starMag
@@ -265,6 +276,7 @@ class BeatWallService : WallpaperService() {
             )
             cachedSkySnapshot = snap
             lastSkyComputeMs = nowMs
+            lastSkyPreviewMin = prevMin
             return snap
         }
 
@@ -280,16 +292,8 @@ class BeatWallService : WallpaperService() {
         private val mwY = FloatArray(10)
         private var visibleMwCount = 0
 
-        // Reusable shader & matrix cache (zero per-frame allocations at 120 Hz)
+        // Reusable shader matrix (zero per-frame allocations at 120 Hz)
         private val shaderMatrix = Matrix()
-        private var cachedBacklightColor = 0
-        private var cachedBacklightShader: RadialGradient? = null
-        private var cachedSpotlightColor = 0
-        private var cachedSpotlightShader: RadialGradient? = null
-        private var cachedSweepKey = 0L
-        private var cachedSweepShader: LinearGradient? = null
-        private var cachedSoftMistColor = 0
-        private var cachedSoftMistShader: RadialGradient? = null
 
         private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply {
             isDither = true
@@ -499,6 +503,7 @@ class BeatWallService : WallpaperService() {
             lockLyricsClip.set(0f, height * 0.415f, width.toFloat(), height * 0.73f)
             homeLyricsClip.set(0f, height * 0.21f, width.toFloat(), height * 0.77f)
             headerTitleCacheKey = null
+            lastSkyComputeMs = 0L
             rebuildLayoutsIfNeeded(force = true)
             if (visible) scheduleNextFrame()
         }
@@ -546,6 +551,7 @@ class BeatWallService : WallpaperService() {
             try {
                 val prevKey = activeState?.trackKey
                 val newKey = state?.trackKey
+                val prevHadLyrics = activeState?.lyrics?.isNotEmpty() == true
                 val artChanged = activeState?.processedArt !== state?.processedArt
 
                 if (prevKey != newKey) {
@@ -599,22 +605,26 @@ class BeatWallService : WallpaperService() {
                 }
                 rebuildLayoutsIfNeeded(force = false)
                 if (visible && powerManager.isInteractive) {
-                    snapToCurrentPosition()
+                    snapToCurrentPosition(forceHardSnap = (prevKey != newKey || !prevHadLyrics))
                     updateLoopState()
                 }
             } catch (_: Throwable) {
             }
         }
 
-        private fun snapToCurrentPosition() {
+        private fun snapToCurrentPosition(forceHardSnap: Boolean = true) {
             val st = activeState ?: return
             if (st.lyrics.isEmpty()) return
             val idx = LrcParser.findLineIndex(st.lyrics, st.currentPositionMs())
-            currentLineIndex = idx
+            val isLargeSeek = currentLineIndex < 0 || abs(idx - currentLineIndex) > 2
             if (idx in lyricYCenters.indices) {
+                currentLineIndex = idx
                 targetY = lyricYCenters[idx]
-                springY = targetY
-                springVelocity = 0f
+                // Only hard-teleport springY on wake-up, new track, or large scrub; never kill smooth glide on routine heartbeats!
+                if (forceHardSnap || isLargeSeek) {
+                    springY = targetY
+                    springVelocity = 0f
+                }
             }
         }
 
@@ -639,10 +649,12 @@ class BeatWallService : WallpaperService() {
                 lyricYCenters = FloatArray(0)
                 lyricMaxLineW = FloatArray(0)
                 measuredTrackKey = null
+                measuredLyricsRef = null
                 return
             }
-            if (!force && measuredTrackKey == st.trackKey) return
+            if (!force && measuredTrackKey == st.trackKey && measuredLyricsRef === st.lyrics) return
             measuredTrackKey = st.trackKey
+            measuredLyricsRef = st.lyrics
 
             val contentW = (width * 0.88f).toInt().coerceAtLeast(220)
             val dynSize = computeDynamicLyricTextSize(st.lyrics, contentW)
@@ -1031,7 +1043,7 @@ class BeatWallService : WallpaperService() {
             drawUnifiedCompactHeader(canvas, state, art, headerTop, timeSec, accent, primary, headerAlpha)
 
             if (state.isNotebookLm) {
-                drawNotebookTwoHostStudio(canvas, state, isLock, timeSec, masterAlpha)
+                drawNotebookTwoHostStudio(canvas, state, lb, timeSec, masterAlpha)
                 return
             }
 
@@ -1077,8 +1089,8 @@ class BeatWallService : WallpaperService() {
             return width * (0.08f + 0.84f * frac)
         }
 
-        private fun projectAltitudeToY(altDeg: Float, horizonY: Float, isLock: Boolean): Float {
-            val topY = if (isLock) height * 0.09f else height * 0.07f
+        private fun projectAltitudeToY(altDeg: Float, horizonY: Float, lockBlendVal: Float): Float {
+            val topY = height * (0.07f + 0.02f * lockBlendVal)
             val altFrac = (altDeg / 85f).coerceIn(-0.08f, 1.0f)
             return horizonY - (horizonY - topY) * altFrac
         }
@@ -1099,9 +1111,9 @@ class BeatWallService : WallpaperService() {
             val windDir = if (weatherState.windDirDeg in 0f..180f) -1f else 1f
 
             val sunX = projectAzimuthToX(sky.sunAzDeg)
-            val sunY = projectAltitudeToY(sky.sunAltDeg, horizonY, isLock)
+            val sunY = projectAltitudeToY(sky.sunAltDeg, horizonY, lockBlend)
             val moonX = projectAzimuthToX(sky.moonAzDeg)
-            val moonY = projectAltitudeToY(sky.moonAltDeg, horizonY, isLock)
+            val moonY = projectAltitudeToY(sky.moonAltDeg, horizonY, lockBlend)
             val orbX = if (sky.sunAltDeg > -4f) sunX else moonX
 
             fun drawSoftOval(cx: Float, cy: Float, rx: Float, ry: Float, colWithAlpha: Int) {
@@ -1147,7 +1159,7 @@ class BeatWallService : WallpaperService() {
                 // 5 Naked-Eye Planets (Mercury, Venus, Mars, Jupiter, Saturn)
                 for (p in sky.planets) {
                     val px = projectAzimuthToX(p.azDeg)
-                    val py = projectAltitudeToY(p.altDeg, horizonY, isLock)
+                    val py = projectAltitudeToY(p.altDeg, horizonY, lockBlend)
                     orbPaint.color = p.color
                     orbPaint.alpha = (masterAlpha * 0.90f * starFade * cloudDim).toInt().coerceIn(0, 255)
                     canvas.drawCircle(px, py, density * (if (p.name == "Venus" || p.name == "Jupiter") 2.1f else 1.5f), orbPaint)
@@ -1341,14 +1353,14 @@ class BeatWallService : WallpaperService() {
         private fun drawNotebookTwoHostStudio(
             canvas: Canvas,
             state: ActiveTrackState,
-            isLock: Boolean,
+            lockBlendVal: Float,
             timeSec: Double,
             masterAlpha: Int
         ) {
-            // Dual-Host AI Podcast Studio: serene continuous 360-deg color spectrum (~4 min/cycle)
+            // Dual-Host AI Podcast Studio: serene continuous 360-deg color spectrum (~4 min/cycle, pauses cleanly with audio)
             // Quantized to 4-deg hue steps for zero-allocation 24-slot RadialGradient cache hits at 120 Hz
             val baseHue = (((state.title.hashCode() and 0x7FFFFFFF) % 360).toFloat())
-            val rawHueA = (baseHue + (timeSec * 1.5).toFloat()) % 360f
+            val rawHueA = (baseHue + (studioPhase * 1.5).toFloat()) % 360f
             val hueA = ((rawHueA / 4f).toInt() * 4f) % 360f
             val hueB = (hueA + 70f) % 360f
             nbHslBuf[0] = hueA; nbHslBuf[1] = 0.82f; nbHslBuf[2] = 0.62f
@@ -1358,7 +1370,7 @@ class BeatWallService : WallpaperService() {
             val hostARgb = hostACol and 0x00FFFFFF
             val hostBRgb = hostBCol and 0x00FFFFFF
 
-            val cy = if (isLock) height * 0.56f else height * 0.50f
+            val cy = height * (0.50f + (0.56f - 0.50f) * lockBlendVal)
             val cx = width * 0.50f
             val p = studioPhase
 
@@ -1586,18 +1598,7 @@ class BeatWallService : WallpaperService() {
             if (art != null) {
                 miniArtRect.set(leftMargin, headerTop, leftMargin + thumbSize, headerTop + thumbSize)
                 val backColor = (primary and 0x00FFFFFF) or (((headerAlpha * 0.36f).toInt()) shl 24)
-                val backShader = if (cachedBacklightColor == backColor && cachedBacklightShader != null) {
-                    cachedBacklightShader!!
-                } else {
-                    RadialGradient(
-                        0f, 0f, 1f,
-                        intArrayOf(backColor, Color.TRANSPARENT),
-                        null, Shader.TileMode.CLAMP
-                    ).also {
-                        cachedBacklightColor = backColor
-                        cachedBacklightShader = it
-                    }
-                }
+                val backShader = getCachedSoftRadialShader(backColor)
                 val backR = thumbSize * 1.15f
                 shaderMatrix.reset()
                 shaderMatrix.setScale(backR, backR)
@@ -1895,14 +1896,18 @@ class BeatWallService : WallpaperService() {
                 if (state.lyrics[i].isInterlude) {
                     // Multi-row diagonal instrumental: smooth symbol-by-symbol wave sweep (⌒ ⌒ ⌒ ⌒)
                     val lineStart = state.lyrics[i].timeMs
-                    val nextStart = if (i + 1 < state.lyrics.size) state.lyrics[i + 1].timeMs else lineStart + 3000L
+                    val nextStart = when {
+                        i + 1 < state.lyrics.size -> state.lyrics[i + 1].timeMs
+                        state.durationMs > lineStart + 800L -> state.durationMs
+                        else -> lineStart + 3000L
+                    }
                     val lineDur = (nextStart - lineStart).coerceAtLeast(800L)
                     val rowProg = when {
                         i < approxIdx -> 1.0f
                         i == approxIdx -> ((posMs - lineStart).toFloat() / (lineDur * 0.96f)).coerceIn(0f, 1f)
                         else -> 0.0f
                     }
-                    val releaseFade = if (i < approxIdx) {
+                    val releaseFade = if (i == approxIdx - 1) {
                         val nextLineMs = state.lyrics[approxIdx].timeMs
                         (1f - ((posMs - nextLineMs).coerceAtLeast(0L) / 450f)).coerceIn(0f, 1f)
                     } else 0f
@@ -1947,7 +1952,7 @@ class BeatWallService : WallpaperService() {
                     // Already-sung lines smoothly relax back into Soft White as they rise above center (zero 3rd shade)
                     val sungTint = sungRgb or (lineAlpha shl 24)
                     val unsungTint = unsungRgb or (((lineAlpha * 0.74f).toInt().coerceIn(0, 255)) shl 24)
-                    val releaseFade = if (i < approxIdx) {
+                    val releaseFade = if (i == approxIdx - 1) {
                         val nextLineMs = state.lyrics[approxIdx].timeMs
                         (1f - ((posMs - nextLineMs).coerceAtLeast(0L) / 450f)).coerceIn(0f, 1f)
                     } else 0f

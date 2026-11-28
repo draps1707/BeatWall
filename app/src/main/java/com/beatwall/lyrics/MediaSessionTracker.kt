@@ -45,9 +45,13 @@ data class ActiveTrackState(
     val isFetchingLyrics: Boolean = false
 ) {
     fun currentPositionMs(nowElapsedMs: Long = SystemClock.elapsedRealtime()): Long {
-        if (!isPlaying) return basePositionMs
-        val delta = (nowElapsedMs - lastUpdateElapsedMs).coerceAtLeast(0L)
-        return (basePositionMs + (delta * playbackSpeed).toLong()).coerceAtLeast(0L)
+        val raw = if (!isPlaying) {
+            basePositionMs.coerceAtLeast(0L)
+        } else {
+            val delta = (nowElapsedMs - lastUpdateElapsedMs).coerceAtLeast(0L)
+            (basePositionMs + (delta * playbackSpeed).toLong()).coerceAtLeast(0L)
+        }
+        return if (durationMs > 0L) raw.coerceAtMost(durationMs) else raw
     }
 
     fun progressFraction(nowElapsedMs: Long = SystemClock.elapsedRealtime()): Float {
@@ -376,11 +380,27 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
         val validRawCover = rawCover?.takeUnless { isSpotifyTargetPlaceholder(it) }
         val artSig = "$trackKey|${validRawCover != null}|${artUri ?: ""}"
 
-        if (trackKey == currentTrackKey && currentState != null &&
-            (artLoadedForTrackKey == trackKey || artSig == currentArtSignature)
-        ) {
-            handlePlaybackStateOnly(pb)
-            return
+        if (trackKey == currentTrackKey && currentState != null) {
+            val prevDur = currentState?.durationMs ?: 0L
+            if (durationMs > 0L && prevDur != durationMs) {
+                currentState = currentState?.copy(durationMs = durationMs)
+                if (prevDur == 0L && currentState?.isNotebookLm != true &&
+                    lyricsJob?.isActive != true && currentState?.lyrics?.isNotEmpty() == true
+                ) {
+                    val tk = trackKey
+                    lyricsJob = scope.launch {
+                        val reparsed = lrcClient.fetchSyncedLyrics(rawTitle, rawArtist, durationMs)
+                        if (tk != currentTrackKey || reparsed.isEmpty()) return@launch
+                        val cur = currentState?.takeIf { it.trackKey == tk } ?: return@launch
+                        currentState = cur.copy(lyrics = reparsed, showLyrics = true)
+                        notifyListeners(currentState)
+                    }
+                }
+            }
+            if (artLoadedForTrackKey == trackKey || artSig == currentArtSignature) {
+                handlePlaybackStateOnly(pb)
+                return
+            }
         }
 
         val isNewTrack = trackKey != currentTrackKey
@@ -458,13 +478,25 @@ class MediaSessionTracker private constructor(private val appContext: Context) {
             }
         }
 
-        // Prefer ART_URI -> validRawCover -> iTunes HD Cover Search fallback
+        // NotebookLM always uses its curated dual-wave studio artwork (never overwrite with browser favicons)
         artJob?.cancel()
+        if (isNotebook) {
+            artLoadedForTrackKey = trackKey
+            return
+        }
+        // Prefer ART_URI -> validRawCover -> iTunes HD Cover Search fallback
         artJob = scope.launch {
             val bmp = withContext(Dispatchers.IO) {
                 val fromUri = loadBitmapFromUriCached(artUri)?.takeUnless { isSpotifyTargetPlaceholder(it) }
                 fromUri ?: validRawCover ?: if (isNotebook) null else fetchItunesArtworkCached(clean.title, clean.artist)
-            } ?: return@launch
+            }
+            if (bmp == null) {
+                if (isNewTrack && !isNotebook && trackKey == currentTrackKey && currentState?.trackKey == trackKey) {
+                    currentState = currentState?.copy(processedArt = null)
+                    notifyListeners(currentState)
+                }
+                return@launch
+            }
 
             if (trackKey != currentTrackKey) return@launch
 

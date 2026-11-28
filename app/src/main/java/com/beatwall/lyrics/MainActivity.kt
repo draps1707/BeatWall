@@ -168,7 +168,9 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
     }
 
     override fun onDestroy() {
-        LocationStore.setPreviewMinute(this, -1)
+        if (!isChangingConfigurations) {
+            LocationStore.setPreviewMinute(this, -1)
+        }
         super.onDestroy()
     }
 
@@ -271,11 +273,12 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
             Toast.makeText(this, "Could not read cached city; enter city manually", Toast.LENGTH_SHORT).show()
             return
         }
+        val appCtx = applicationContext
         thread {
             var label = "%.2f°, %.2f°".format(loc.latitude, loc.longitude)
             try {
                 @Suppress("DEPRECATION")
-                val list = Geocoder(this, Locale.getDefault()).getFromLocation(loc.latitude, loc.longitude, 1)
+                val list = Geocoder(appCtx, Locale.getDefault()).getFromLocation(loc.latitude, loc.longitude, 1)
                 val addr = list?.firstOrNull()
                 if (addr != null) {
                     val city = addr.locality ?: addr.subAdminArea ?: addr.adminArea
@@ -284,8 +287,9 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
                 }
             } catch (_: Exception) {
             }
-            LocationStore.save(this, loc.latitude, loc.longitude, label)
+            LocationStore.save(appCtx, loc.latitude, loc.longitude, label)
             runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 refreshSkyCard()
                 Toast.makeText(this, "Sky updated for $label", Toast.LENGTH_SHORT).show()
             }
@@ -293,17 +297,19 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
     }
 
     private fun geocodeCityName(query: String) {
+        val appCtx = applicationContext
         thread {
             try {
                 @Suppress("DEPRECATION")
-                val list = Geocoder(this, Locale.getDefault()).getFromLocationName(query, 1)
+                val list = Geocoder(appCtx, Locale.getDefault()).getFromLocationName(query, 1)
                 val addr = list?.firstOrNull()
                 if (addr != null) {
                     val city = addr.locality ?: addr.subAdminArea ?: addr.featureName ?: query
                     val state = addr.adminArea
                     val label = listOfNotNull(city, state).distinct().joinToString(", ").ifBlank { query }
-                    LocationStore.save(this, addr.latitude, addr.longitude, label)
+                    LocationStore.save(appCtx, addr.latitude, addr.longitude, label)
                     runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
                         edtCityInput.setText("")
                         refreshSkyCard()
                         Toast.makeText(this, "Sky updated for $label", Toast.LENGTH_SHORT).show()
@@ -313,6 +319,7 @@ class MainActivity : AppCompatActivity(), MediaSessionTracker.Listener {
             } catch (_: Exception) {
             }
             runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 Toast.makeText(this, "City not found; check spelling or internet", Toast.LENGTH_SHORT).show()
             }
         }

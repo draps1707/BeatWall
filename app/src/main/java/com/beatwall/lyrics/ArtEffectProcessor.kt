@@ -140,14 +140,24 @@ class ArtEffectProcessor {
 
         val isDay = sunAltDeg > -2f
         val biome = NatureBiomes.getBlendedBiome(dayOfMonth, minuteOfDay)
-        val biomeWeight = if (sunAltDeg > 10f) 0.18f else if (isDay) 0.25f else if (sunAltDeg < -18f) 0.25f else 0.48f
+        val biomeWeight = when {
+            sunAltDeg > 10f -> 0.18f
+            isDay -> 0.25f
+            sunAltDeg < -12f -> 0.06f // Keep deep starry nights crisp cosmic indigo -> OLED black (never muddy brown)
+            else -> 0.34f
+        }
         var zenith = ColorUtils.blendARGB(baseZenith, biome.zenith, biomeWeight)
         if (sunAltDeg < -18f) {
             val oledPure = ((-18f - sunAltDeg) / 6f).coerceIn(0f, 1f)
-            zenith = ColorUtils.blendARGB(zenith, 0xFF000000.toInt(), oledPure * 0.85f)
+            zenith = ColorUtils.blendARGB(zenith, 0xFF000000.toInt(), oledPure * 0.88f)
         }
         val midSky = ColorUtils.blendARGB(baseMid, biome.midSky, biomeWeight)
-        var paleHorizon = ColorUtils.blendARGB(baseHorizon, biome.horizon, if (isDay) 0.16f else 0.38f)
+        val horizonWeight = when {
+            isDay -> 0.16f
+            sunAltDeg < -12f -> 0.08f
+            else -> 0.32f
+        }
+        var paleHorizon = ColorUtils.blendARGB(baseHorizon, biome.horizon, horizonWeight)
         if (sunAltDeg in -5f..8f && humidityPct > 55) {
             val humWarmth = ((humidityPct - 55) / 45f).coerceIn(0f, 1f) * 0.28f
             paleHorizon = ColorUtils.blendARGB(paleHorizon, 0xFFEA580C.toInt(), humWarmth)
@@ -178,7 +188,7 @@ class ArtEffectProcessor {
         }
         val shoreDark = if (isDay) 0xFF121316.toInt() else if (sunAltDeg < -18f) 0xFF000000.toInt() else 0xFF030508.toInt()
 
-        val horizonY = circHeight * 0.66f
+        val horizonY = circHeight * 0.69f
         val shoreY = circHeight * 0.85f
 
         val canvas = Canvas(circadianBitmap)
@@ -242,6 +252,7 @@ class ArtEffectProcessor {
         }
     }
 
+    @Synchronized
     fun processNotebookStudioFallback(titleSeed: String = ""): ProcessedArt {
         // 6 curated dual-host AI study palettes rotated deterministically by topic title so it stays fresh every day
         val themes = arrayOf(
@@ -332,6 +343,7 @@ class ArtEffectProcessor {
         return Triple(night, preDawn, (elapsed.toFloat() / span).coerceIn(0f, 1f))
     }
 
+    @Synchronized
     fun process(rawCover: Bitmap): ProcessedArt {
         val palette = Palette.from(rawCover).maximumColorCount(16).generate()
 

@@ -26,54 +26,63 @@ class LrcLibClient(context: Context) {
         val clean = TitleSanitizer.clean(rawTitle, rawArtist)
         if (clean.title.isBlank()) return@withContext emptyList()
 
+        val durationSec = if (durationMs > 0L) (durationMs / 1000L).toInt() else 0
         val cacheKey = sha256("${clean.artist.lowercase()}|${clean.title.lowercase()}")
-        memCache.get(cacheKey)?.let { return@withContext it }
+        val memKey = "$cacheKey|$durationSec"
+        memCache.get(memKey)?.let { return@withContext it }
 
         val cachedFile = File(cacheDir, "$cacheKey.lrc")
         if (cachedFile.exists()) {
-            cachedFile.setLastModified(System.currentTimeMillis())
             val raw = cachedFile.readText()
-            val parsed = if (raw == NO_LYRICS_MARKER) emptyList() else LrcParser.parse(raw, durationMs)
-            memCache.put(cacheKey, parsed)
-            return@withContext parsed
+            if (raw == NO_LYRICS_MARKER) {
+                val ageMs = System.currentTimeMillis() - cachedFile.lastModified()
+                if (ageMs < NO_LYRICS_TTL_MS) {
+                    memCache.put(memKey, emptyList())
+                    return@withContext emptyList()
+                }
+            } else {
+                cachedFile.setLastModified(System.currentTimeMillis())
+                val parsed = LrcParser.parse(raw, durationMs)
+                memCache.put(memKey, parsed)
+                return@withContext parsed
+            }
         }
-
-        val durationSec = if (durationMs > 0L) (durationMs / 1000L).toInt() else 0
         val primaryArtist = clean.artist.split(',', '&').firstOrNull()?.trim().orEmpty()
         val strippedTitle = clean.title.replace(anyParensRegex, "").trim()
         val searchTitle = strippedTitle.ifEmpty { clean.title }
         val searchArtist = primaryArtist.ifEmpty { clean.artist }
 
         var fallbackPlain: String? = null
+        val netReachable = BooleanArray(1)
 
         // Tier 1: LRCLIB (Exact -> Primary Artist -> Stripped Parenthetical -> Search)
-        var (syncedLrc, plain1) = queryGetEndpoint(clean.title, clean.artist, durationSec)
+        var (syncedLrc, plain1) = queryGetEndpoint(clean.title, clean.artist, durationSec, netReachable)
         if (fallbackPlain.isNullOrBlank()) fallbackPlain = plain1
 
         if (syncedLrc.isNullOrBlank() && primaryArtist.isNotEmpty() && primaryArtist != clean.artist) {
-            val (s2, p2) = queryGetEndpoint(clean.title, primaryArtist, durationSec)
+            val (s2, p2) = queryGetEndpoint(clean.title, primaryArtist, durationSec, netReachable)
             syncedLrc = s2
             if (fallbackPlain.isNullOrBlank()) fallbackPlain = p2
         }
         if (syncedLrc.isNullOrBlank() && strippedTitle.isNotEmpty() && strippedTitle != clean.title) {
-            val (s3, p3) = queryGetEndpoint(strippedTitle, searchArtist, durationSec)
+            val (s3, p3) = queryGetEndpoint(strippedTitle, searchArtist, durationSec, netReachable)
             syncedLrc = s3
             if (fallbackPlain.isNullOrBlank()) fallbackPlain = p3
         }
         if (syncedLrc.isNullOrBlank()) {
-            val (s4, p4) = querySearchEndpoint(searchTitle, searchArtist, durationSec)
+            val (s4, p4) = querySearchEndpoint(searchTitle, searchArtist, durationSec, netReachable)
             syncedLrc = s4
             if (fallbackPlain.isNullOrBlank()) fallbackPlain = p4
         }
 
         // Tier 2: SimpMusic Lyrics API
         if (syncedLrc.isNullOrBlank()) {
-            syncedLrc = querySimpMusicApi(searchTitle, searchArtist, durationSec)
+            syncedLrc = querySimpMusicApi(searchTitle, searchArtist, durationSec, netReachable)
         }
 
         // Tier 3: NetEase Cloud Music Public LRC Search
         if (syncedLrc.isNullOrBlank()) {
-            syncedLrc = queryNetEaseApi(searchTitle, searchArtist, durationSec)
+            syncedLrc = queryNetEaseApi(searchTitle, searchArtist, durationSec, netReachable)
         }
 
         // Tier 4: LRCLIB plainLyrics gentle duration-paced fallback
@@ -83,13 +92,16 @@ class LrcLibClient(context: Context) {
 
         trimCacheIfNeeded()
         if (syncedLrc.isNullOrBlank()) {
-            cachedFile.writeText(NO_LYRICS_MARKER)
-            memCache.put(cacheKey, emptyList())
+            // Only cache negative result if at least one lyrics API actually responded (never poison cache on offline/timeout)
+            if (netReachable[0]) {
+                cachedFile.writeText(NO_LYRICS_MARKER)
+                memCache.put(memKey, emptyList())
+            }
             emptyList()
         } else {
             cachedFile.writeText(syncedLrc)
             val parsed = LrcParser.parse(syncedLrc, durationMs)
-            memCache.put(cacheKey, parsed)
+            memCache.put(memKey, parsed)
             parsed
         }
     }
@@ -113,13 +125,13 @@ class LrcLibClient(context: Context) {
         return sb.toString()
     }
 
-    private fun queryGetEndpoint(title: String, artist: String, durationSec: Int): Pair<String?, String?> {
+    private fun queryGetEndpoint(title: String, artist: String, durationSec: Int, netReachable: BooleanArray): Pair<String?, String?> {
         return try {
             val t = URLEncoder.encode(title, "UTF-8")
             val a = URLEncoder.encode(artist, "UTF-8")
             val durPart = if (durationSec > 0) "&duration=$durationSec" else ""
             val url = URL("https://lrclib.net/api/get?track_name=$t&artist_name=$a$durPart")
-            val body = httpGet(url) ?: return null to null
+            val body = httpGet(url, netReachable) ?: return null to null
             val json = JSONObject(body)
             val synced = json.optString("syncedLyrics").takeIf { it.isNotBlank() && it != "null" }
             val plain = json.optString("plainLyrics").takeIf { it.isNotBlank() && it != "null" }
@@ -129,11 +141,11 @@ class LrcLibClient(context: Context) {
         }
     }
 
-    private fun querySearchEndpoint(title: String, artist: String, durationSec: Int): Pair<String?, String?> {
+    private fun querySearchEndpoint(title: String, artist: String, durationSec: Int, netReachable: BooleanArray): Pair<String?, String?> {
         return try {
             val q = URLEncoder.encode("$artist $title".trim(), "UTF-8")
             val url = URL("https://lrclib.net/api/search?q=$q")
-            val body = httpGet(url) ?: return null to null
+            val body = httpGet(url, netReachable) ?: return null to null
             val arr = JSONArray(body)
             var bestSynced: String? = null
             var bestPlain: String? = null
@@ -158,11 +170,11 @@ class LrcLibClient(context: Context) {
         }
     }
 
-    private fun querySimpMusicApi(title: String, artist: String, durationSec: Int): String? {
+    private fun querySimpMusicApi(title: String, artist: String, durationSec: Int, netReachable: BooleanArray): String? {
         return try {
             val q = URLEncoder.encode("$title $artist".trim(), "UTF-8")
             val url = URL("https://api-lyrics.simpmusic.org/v1/search?q=$q")
-            val body = httpGet(url) ?: return null
+            val body = httpGet(url, netReachable) ?: return null
             val root = JSONObject(body)
             val data = root.optJSONArray("data") ?: return null
             var bestSynced: String? = null
@@ -186,11 +198,11 @@ class LrcLibClient(context: Context) {
         }
     }
 
-    private fun queryNetEaseApi(title: String, artist: String, durationSec: Int): String? {
+    private fun queryNetEaseApi(title: String, artist: String, durationSec: Int, netReachable: BooleanArray): String? {
         return try {
             val q = URLEncoder.encode("$title $artist".trim(), "UTF-8")
             val searchUrl = URL("https://music.163.com/api/search/get/web?s=$q&type=1&limit=3")
-            val searchBody = httpGet(searchUrl) ?: return null
+            val searchBody = httpGet(searchUrl, netReachable) ?: return null
             val songs = JSONObject(searchBody)
                 .optJSONObject("result")
                 ?.optJSONArray("songs") ?: return null
@@ -211,7 +223,7 @@ class LrcLibClient(context: Context) {
             if (bestSongId <= 0L) return null
 
             val lyricUrl = URL("https://music.163.com/api/song/lyric?id=$bestSongId&lv=1")
-            val lyricBody = httpGet(lyricUrl) ?: return null
+            val lyricBody = httpGet(lyricUrl, netReachable) ?: return null
             val lrc = JSONObject(lyricBody)
                 .optJSONObject("lrc")
                 ?.optString("lyric")
@@ -222,15 +234,17 @@ class LrcLibClient(context: Context) {
         }
     }
 
-    private fun httpGet(url: URL): String? {
+    private fun httpGet(url: URL, netReachable: BooleanArray? = null): String? {
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 2000
-            readTimeout = 2000
-            setRequestProperty("User-Agent", "BeatWall/7.1.0 (https://github.com/beatwall)")
+            connectTimeout = 3500
+            readTimeout = 3500
+            setRequestProperty("User-Agent", "BeatWall/11.13.0 (https://github.com/beatwall)")
         }
         return try {
-            if (conn.responseCode == 200) {
+            val code = conn.responseCode
+            if (code in 200..499) netReachable?.set(0, true)
+            if (code == 200) {
                 conn.inputStream.bufferedReader().use { it.readText() }
             } else {
                 null
@@ -255,5 +269,6 @@ class LrcLibClient(context: Context) {
 
     companion object {
         private const val NO_LYRICS_MARKER = "__NO_SYNCED_LYRICS__"
+        private const val NO_LYRICS_TTL_MS = 24L * 60L * 60L * 1000L
     }
 }
