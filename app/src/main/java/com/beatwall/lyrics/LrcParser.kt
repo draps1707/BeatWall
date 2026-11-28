@@ -51,16 +51,12 @@ object LrcParser {
         if (parsed.isEmpty()) return emptyList()
         parsed.sortBy { it.timeMs }
 
-        // Helper to split an instrumental span into 2..5 evenly paced diagonal rows (~2.5-3.5s each)
-        val result = ArrayList<LyricLine>(parsed.size + 16)
+        // Split ANY instrumental span (intro, explicit LRC blank/symbol line, or long gap)
+        // into lively ~3s diagonal rows so long drops/solos flow continuously instead of freezing!
+        val result = ArrayList<LyricLine>(parsed.size + 24)
         fun addDiagonalInterludeRows(startMs: Long, endMs: Long) {
             val span = (endMs - startMs).coerceAtLeast(1000L)
-            val rows = when {
-                span >= 14_000L -> 5
-                span >= 9_500L -> 4
-                span >= 6_000L -> 3
-                else -> 2
-            }
+            val rows = ((span + 1400L) / 3000L).toInt().coerceIn(2, 16)
             val step = span / rows
             for (r in 0 until rows) {
                 result.add(LyricLine(startMs + r * step, "• • •", isInterlude = true))
@@ -68,7 +64,7 @@ object LrcParser {
         }
 
         // Restore intro instrumentals for any song whose first vocal starts after 3.5s
-        if (parsed.first().timeMs > INTRO_GAP_MS) {
+        if (!parsed.first().isInterlude && parsed.first().timeMs > INTRO_GAP_MS) {
             addDiagonalInterludeRows(0L, parsed.first().timeMs)
         }
 
@@ -80,7 +76,24 @@ object LrcParser {
                 }
                 continue
             }
-            if (result.isNotEmpty() && !result.last().isInterlude && !curr.isInterlude) {
+
+            if (curr.isInterlude) {
+                // Expand explicit LRC interlude/blank lines (like 30s EDM drops) across their full span!
+                val nextReal = parsed.drop(i + 1).firstOrNull { !it.isInterlude }
+                if (nextReal != null) {
+                    val span = nextReal.timeMs - curr.timeMs
+                    if (span >= 5500L) {
+                        addDiagonalInterludeRows(curr.timeMs, nextReal.timeMs)
+                    } else {
+                        result.add(curr)
+                    }
+                } else {
+                    result.add(curr)
+                }
+                continue
+            }
+
+            if (result.isNotEmpty() && !result.last().isInterlude) {
                 val gap = curr.timeMs - result.last().timeMs
                 if (gap > INTERLUDE_GAP_MS) {
                     addDiagonalInterludeRows(result.last().timeMs + 3500L, curr.timeMs)
